@@ -1,0 +1,13 @@
+{
+  "courses": [
+    {
+      "course_id": "PH0000",
+      "title": "Example Physics Course"
+    },
+    {
+      "course_id": "CS0000",
+      "title": "Example Computing Course"
+    }
+  ],
+  "synthetic": true
+}

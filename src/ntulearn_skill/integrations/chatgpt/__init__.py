@@ -1,0 +1,1 @@
+"""Future ChatGPT adapter boundary."""

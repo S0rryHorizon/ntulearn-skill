@@ -1,0 +1,52 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.cookie
+*.cookies
+cookies.json
+session.json
+auth.json
+credentials.json
+secrets.json
+
+# Private NTULearn data and local workspaces
+.local/
+/downloads/
+/cache/
+/data/
+/courses/
+/recon/
+/request-dumps/
+*.har
+*.log
+
+# Databases and generated indexes are private by default. Only explicitly
+# synthetic fixtures under tests/fixtures/synthetic may be committed.
+*.sqlite
+*.sqlite3
+*.db
+!tests/fixtures/synthetic/**/*.sqlite
+!tests/fixtures/synthetic/**/*.sqlite3
+!tests/fixtures/synthetic/**/*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Tool caches and coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

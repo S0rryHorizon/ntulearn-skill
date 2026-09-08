@@ -1,0 +1,1 @@
+"""LLM-independent application core."""
