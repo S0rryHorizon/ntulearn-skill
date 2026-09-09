@@ -41,3 +41,8 @@ Audit tracked content and every Git revision, wheel and sdist contents, fixture
 provenance, dependency declarations, installation, CLI documentation, contributor
 and security guidance, license and CI. Verify the final tree is clean and no remote
 or publication occurred. Only then evaluate the human public-release gate.
+
+Failed parser attempts remain immutable audit records and are not reusable cache entries.
+The version/parser/engine/settings key identifies at most one reusable terminal result;
+a transient failure can be retried without inventing new settings. Ordinary Python
+diagnostics are discarded within serialized parser/fallback calls; this is not process isolation.

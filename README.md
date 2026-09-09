@@ -2,9 +2,10 @@
 
 Local-first NTULearn course synchronization, indexing and retrieval for AI agents.
 
-> **Status: Phase 3 in progress — M1–M2 accepted.** Typed identities, private runtime
-> paths, SQLite migrations, course/content repositories, and immutable resource storage are tested with synthetic
-> data. Synchronization, retrieval, and a working NTULearn connection remain pending.
+> **Status: Phase 3 in progress — M1–M2 and M4 accepted.** Typed identities, private runtime
+> paths, SQLite migrations, immutable resources, PDF/DOCX parsing, classification, and local
+> chunk retrieval are tested with synthetic data. Source sync, full-text search, and a working
+> NTULearn connection remain pending.
 
 ## Motivation
 
@@ -43,7 +44,7 @@ See [data boundaries](docs/privacy/data-boundaries.md) before adding fixtures, l
 1. Phase 0 — Repository Bootstrap (complete)
 2. Phase 1 — NTULearn Reconnaissance (complete with documented limitations; private evidence)
 3. Phase 2 — Architecture Design (complete)
-4. Phase 3 — Implementation (M1–M2 complete; M3–M9 pending)
+4. Phase 3 — Implementation (M1–M2 and M4 complete; M3 in progress; M5–M9 pending)
 5. Phase 4 — Validation
 6. Phase 5 — Open-source Hardening
 

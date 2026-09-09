@@ -65,7 +65,7 @@ def resource_context(
     domain = DomainRepository(database)
     resources = ResourceRepository(database)
     store = ResourceStore(paths, resources)
-    assert store.initialize() == 3
+    assert store.initialize() == 4
     course_id = CourseId("synthetic", "resource-course")
     content_id = ContentId("synthetic", "resource-content")
     domain.put_course(course_id, code="PH0000", title="Example Physics Course")

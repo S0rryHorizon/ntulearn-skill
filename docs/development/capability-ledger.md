@@ -21,3 +21,11 @@ otherwise. Private evidence belongs only in `.local/` or the private runtime roo
 Live checks of course discovery, content traversal, announcements, assessments/due
 reads, and resource retrieval are pending implementation. They are required to
 characterize real usability separately from the public synthetic suite.
+
+## Current live transport gate
+
+An authenticated browser UI was accessible during M3 preparation. Direct navigation
+to an already documented read-only API endpoint was blocked by the browser client.
+No credentials were extracted and no bypass attempted. Automatic end-to-end adapter
+transport remains NOT VALIDATED; synthetic tests and prior-capture replay cannot
+remove this limitation. Detailed evidence is private.

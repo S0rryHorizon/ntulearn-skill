@@ -6,9 +6,9 @@ human gate: no remote creation, push, or package publication is authorized.
 | Milestone | Status | Commit | Acceptance / tests | Validated limitations |
 | --- | --- | --- | --- | --- |
 | M1 Domain and SQLite | PASS | `d9f2997` | 37 tests; lint/format; strict types; compile; wheel/sdist; independent + security review PASS | No live source functionality in M1 |
-| M2 Immutable resources | PASS | This commit: `feat: add immutable resource storage` | 63 tests; lint/format; strict types; compile; independent + critical review PASS | Complete orphan blobs retained; browse failures explicitly repairable |
-| M3 Read-only source | PENDING | — | Depends on M1–M2 | Live validation separate from mocks |
-| M4 Parsing | PENDING | — | Depends on M2 | — |
+| M2 Immutable resources | PASS | `7b96d78` | 63 tests; lint/format; strict types; compile; independent + critical review PASS | Complete orphan blobs retained; browse failures explicitly repairable |
+| M3 Read-only source | IN PROGRESS | — | M1–M2 accepted | Browser UI accessible; direct read API navigation blocked by client |
+| M4 Parsing | PASS | this commit | 82 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | PDF/DOCX only; visual fallback requires an optional provider; no decoder process isolation |
 | M5 FTS retrieval | PENDING | — | Depends on M4 | — |
 | M6 Event candidates | PENDING | — | Depends on M3–M5 | — |
 | M7 Reconciliation | PENDING | — | Depends on M6 | — |
