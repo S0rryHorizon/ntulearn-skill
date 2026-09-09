@@ -11,7 +11,7 @@ from ntulearn_skill.storage import Database, DomainRepository, StorageError
 @pytest.fixture
 def repository(tmp_path: Path) -> DomainRepository:
     value = DomainRepository(Database(tmp_path / "private" / "db" / "metadata.sqlite3"))
-    assert value.initialize() == 2
+    assert value.initialize() == 3
     return value
 
 

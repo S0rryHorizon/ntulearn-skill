@@ -279,9 +279,7 @@ class DomainRepository:
                         (timestamp, int(existing["content_key"])),
                     )
                 else:
-                    course_key = self._lookup_domain_key(
-                        connection, course_id, "course", "course"
-                    )
+                    course_key = self._lookup_domain_key(connection, course_id, "course", "course")
                     if existing is not None and int(existing["course_key"]) != course_key:
                         raise ValueError("a content node cannot move to another course")
                     parent_key = None

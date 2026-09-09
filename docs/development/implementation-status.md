@@ -5,8 +5,8 @@ human gate: no remote creation, push, or package publication is authorized.
 
 | Milestone | Status | Commit | Acceptance / tests | Validated limitations |
 | --- | --- | --- | --- | --- |
-| M1 Domain and SQLite | PASS | This commit: `feat: add domain and sqlite foundation` | 37 tests; lint/format; strict types; compile; wheel/sdist; independent + security review PASS | No live source functionality in M1 |
-| M2 Immutable resources | PENDING | — | Depends on M1 | — |
+| M1 Domain and SQLite | PASS | `d9f2997` | 37 tests; lint/format; strict types; compile; wheel/sdist; independent + security review PASS | No live source functionality in M1 |
+| M2 Immutable resources | PASS | This commit: `feat: add immutable resource storage` | 63 tests; lint/format; strict types; compile; independent + critical review PASS | Complete orphan blobs retained; browse failures explicitly repairable |
 | M3 Read-only source | PENDING | — | Depends on M1–M2 | Live validation separate from mocks |
 | M4 Parsing | PENDING | — | Depends on M2 | — |
 | M5 FTS retrieval | PENDING | — | Depends on M4 | — |
