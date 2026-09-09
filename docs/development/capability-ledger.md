@@ -29,3 +29,9 @@ to an already documented read-only API endpoint was blocked by the browser clien
 No credentials were extracted and no bypass attempted. Automatic end-to-end adapter
 transport remains NOT VALIDATED; synthetic tests and prior-capture replay cannot
 remove this limitation. Detailed evidence is private.
+
+The M3 adapter translates discovered course/content records and persists resource
+metadata under synthetic tests. Its session provider and wire executor must be
+supplied by an authorized integration. Resource bytes additionally require an
+explicit fresh-route capability; no browser credential extraction or automatic
+SSO executor is supplied. Exact download identity is checked before dispatch.

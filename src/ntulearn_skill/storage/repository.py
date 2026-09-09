@@ -55,7 +55,7 @@ def _safe_json(value: Mapping[str, object]) -> str:
     if any(not isinstance(item, _JSON_SCALARS) for item in value.values()):
         raise ValueError("metadata values must be JSON scalar values")
     try:
-        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return json.dumps(dict(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     except (TypeError, ValueError):
         raise ValueError("metadata must be JSON-serializable") from None
 
