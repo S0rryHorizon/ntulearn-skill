@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import io
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from docx import Document
+from PIL import Image
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from ntulearn_skill.client.contracts import (
@@ -126,6 +129,34 @@ def _pdf_pages(*pages: str) -> bytes:
     for text in pages:
         document.drawString(72, 720, text)
         document.showPage()
+    document.save()
+    return output.getvalue()
+
+
+def _pdf_multiline(*lines: str) -> bytes:
+    output = io.BytesIO()
+    document = canvas.Canvas(output, pagesize=(612, 792), invariant=1)
+    text = document.beginText(72, 720)
+    for line in lines:
+        text.textLine(line)
+    document.drawText(text)
+    document.save()
+    return output.getvalue()
+
+
+def _text_rich_pdf_with_embedded_image() -> bytes:
+    output = io.BytesIO()
+    document = canvas.Canvas(output, pagesize=(612, 792), invariant=1)
+    document.drawString(
+        72,
+        720,
+        "Assignment deadline is 2032-05-01. This synthetic paragraph supplies native text.",
+    )
+    pixels = Image.new("RGB", (8, 8), color=(31, 63, 95))
+    encoded = io.BytesIO()
+    pixels.save(encoded, format="PNG")
+    encoded.seek(0)
+    document.drawImage(ImageReader(encoded), 72, 600, width=80, height=80)
     document.save()
     return output.getvalue()
 
@@ -394,7 +425,7 @@ def test_docx_table_candidate_resolves_to_structured_table_locator(tmp_path: Pat
     assert event_type is not None and event_type.value == "quiz"
     assert start is not None and start.precision is TemporalPrecision.DATE_ONLY
     _assert_single_evidence_path(candidate)
-    assert {field.source_path for field in candidate.fields} == {"text"}
+    assert all(field.source_path.startswith("text") for field in candidate.fields)
     with harness.database.connect() as connection:
         locator = connection.execute(
             """SELECT version_key, format, docx_element_index, docx_table_index,
@@ -407,6 +438,379 @@ def test_docx_table_candidate_resolves_to_structured_table_locator(tmp_path: Pat
     assert locator["docx_element_index"] == 0
     assert locator["docx_table_index"] == 0
     assert '"table_index":0' in locator["structured_json"]
+
+
+def test_multiline_announcement_associates_date_time_and_venue_without_guessing_timezone(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    observed = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "multiline-announcement"),
+            harness.course_id,
+            "Synthetic Midterm Briefing",
+            (
+                "Date: Wednesday, 10th March 2032\n"
+                "Time: 2.30 to 4.00 pm\n"
+                "Venue\n"
+                "Invented Hall 7\n"
+                "Bring the synthetic reference sheet."
+            ),
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+
+    result = harness.extractor.extract_observation(observed.observation.key)
+
+    assert result.extractor_version == "4"
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    start = candidate.field(CandidateFieldName.START_TIME)
+    end = candidate.field(CandidateFieldName.END_TIME)
+    location = candidate.field(CandidateFieldName.LOCATION)
+    assert start is not None and end is not None and location is not None
+    assert start.precision is TemporalPrecision.UNKNOWN
+    assert end.precision is TemporalPrecision.UNKNOWN
+    assert start.source_timezone is None and end.source_timezone is None
+    assert start.value["instant"] is None and start.value["local_time"] == "14:30"  # type: ignore[index]
+    assert end.value["instant"] is None and end.value["local_time"] == "16:00"  # type: ignore[index]
+    assert start.original_text == "2.30 to 4.00 pm"
+    assert start.value["date_source_text"] == "Wednesday, 10th March 2032"  # type: ignore[index]
+    assert location.value == "Invented Hall 7"
+    assert location.original_text == "Venue\nInvented Hall 7"
+    assert len({field.source_observation_key for field in candidate.fields}) == 1
+    assert all(field.locator_key is None for field in candidate.fields)
+    assert len({field.source_path for field in candidate.fields}) >= 3
+
+
+def test_pdf_list_context_stops_at_next_event_and_keeps_exact_page_locator(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    written = _ingest(
+        harness,
+        _pdf_multiline(
+            "Invented assessment timeline",
+            "First",
+            "Quiz",
+            "Date: Friday, 12th April 2030",
+            "Time: 09.30 am to 10.45 am",
+            "Second Assignment",
+            "Deadline",
+            "by Monday, 15th April 2030",
+        ),
+        "contextual-events-pdf",
+        "contextual-events.pdf",
+    )
+    harness.parser.parse_version(written.version.key)
+
+    result = harness.extractor.extract_resource_version(written.version.key)
+
+    assert len(result.candidates) == 2
+    quiz, assignment = result.candidates
+    assert quiz.field(CandidateFieldName.TITLE).value == "First Quiz"  # type: ignore[union-attr]
+    assert quiz.field(CandidateFieldName.START_TIME).value["local_time"] == "09:30"  # type: ignore[index,union-attr]
+    assert quiz.field(CandidateFieldName.END_TIME).value["local_time"] == "10:45"  # type: ignore[index,union-attr]
+    assert assignment.field(CandidateFieldName.DUE_TIME).value["date"] == "2030-04-15"  # type: ignore[index,union-attr]
+    assert quiz.field(CandidateFieldName.DUE_TIME) is None
+    assert assignment.field(CandidateFieldName.START_TIME) is None
+    for candidate in result.candidates:
+        assert len({field.locator_key for field in candidate.fields}) == 1
+        assert all(field.source_observation_key is None for field in candidate.fields)
+        with harness.database.connect() as connection:
+            locator = connection.execute(
+                "SELECT version_key, physical_page_index FROM source_locator WHERE locator_key = ?",
+                (candidate.fields[0].locator_key,),
+            ).fetchone()
+        assert locator["version_key"] == written.version.key
+        assert locator["physical_page_index"] == 0
+
+
+def test_bare_page_number_is_not_promoted_to_event_ordinal(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    written = _ingest(
+        harness,
+        _pdf_multiline(
+            "7",
+            "Synthetic Assignment Brief",
+            "Deadline",
+            "by 18 August 2034",
+        ),
+        "page-number-before-event",
+        "page-number-before-event.pdf",
+    )
+    harness.parser.parse_version(written.version.key)
+
+    candidate = harness.extractor.extract_resource_version(written.version.key).candidates[0]
+
+    title = candidate.field(CandidateFieldName.TITLE)
+    assert title is not None and title.value == "Synthetic Assignment Brief"
+    assert title.original_text == "Synthetic Assignment Brief"
+
+
+def test_contextual_extraction_abstains_on_publication_office_placeholder_and_negation(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    bodies = (
+        (
+            "negative-publication",
+            "Synthetic Lecture Notes",
+            (
+                "Published: Friday, 12th April 2030\n"
+                "Instructor office location: Invented Faculty Office\n"
+                "Date: __________\n"
+                "The schedule will be arranged later."
+            ),
+        ),
+        (
+            "negative-negation",
+            "Synthetic Quiz Notice",
+            "The quiz will not be held on Friday, 19th April 2030.",
+        ),
+        (
+            "negative-missing-year",
+            "Synthetic Exam Notice",
+            "Date: 21 April\nTime: 2.30 pm\nVenue: Invented Hall 4",
+        ),
+    )
+    for remote_key, title, body in bodies:
+        observed = harness.events.observe_announcement(
+            AnnouncementSourceRecord(
+                AnnouncementId("synthetic", remote_key),
+                harness.course_id,
+                title,
+                body,
+                Availability.ACTIVE,
+            ),
+            sync_run_key=_sync_run(harness.database),
+        )
+        assert harness.extractor.extract_observation(observed.observation.key).candidates == ()
+
+
+def test_context_window_does_not_merge_distinct_events(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    observed = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "distinct-events"),
+            harness.course_id,
+            "Synthetic course update",
+            (
+                "Quiz One\n"
+                "Date: Monday, 6th May 2030\n"
+                "Assignment Two\n"
+                "Deadline: Friday, 10th May 2030"
+            ),
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+
+    result = harness.extractor.extract_observation(observed.observation.key)
+
+    assert len(result.candidates) == 2
+    quiz, assignment = result.candidates
+    assert quiz.field(CandidateFieldName.START_TIME).value["date"] == "2030-05-06"  # type: ignore[index,union-attr]
+    assert quiz.field(CandidateFieldName.DUE_TIME) is None
+    assert assignment.field(CandidateFieldName.DUE_TIME).value["date"] == "2030-05-10"  # type: ignore[index,union-attr]
+    assert assignment.field(CandidateFieldName.START_TIME) is None
+
+
+def test_context_uses_first_event_date_and_ignores_later_labeled_assertions(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    cases = (
+        (
+            "competing-revision",
+            "Synthetic Quiz Notice",
+            "Date: 3 June 2033\nRevision session: 8 June 2033\nTime: 10:00 to 11:00 UTC",
+            "2033-06-03",
+        ),
+        (
+            "competing-feedback",
+            "Synthetic Quiz Update",
+            "Date: 4 June 2033\nFeedback deadline: 9 June 2033",
+            "2033-06-04",
+        ),
+        (
+            "later-update-word",
+            "Synthetic Lecture Notice",
+            "Date: 5 June 2033\nUpdated syllabus published separately.",
+            "2033-06-05",
+        ),
+    )
+    for remote_key, title, body, expected_date in cases:
+        observed = harness.events.observe_announcement(
+            AnnouncementSourceRecord(
+                AnnouncementId("synthetic", remote_key),
+                harness.course_id,
+                title,
+                body,
+                Availability.ACTIVE,
+            ),
+            sync_run_key=_sync_run(harness.database),
+        )
+        candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+        start = candidate.field(CandidateFieldName.START_TIME)
+        assert start is not None and start.value["date"] == expected_date  # type: ignore[index]
+        assert start.precision is TemporalPrecision.DATE_ONLY
+        assert candidate.field(CandidateFieldName.END_TIME) is None
+        assert candidate.field(CandidateFieldName.DUE_TIME) is None
+
+
+def test_established_event_assertion_stops_before_independent_sentences(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    cases = (
+        (
+            "later-revision-session",
+            "Synthetic Quiz Notice",
+            "Quiz on 6 May 2030. Revision session starts 7 May 2030 10:00 UTC.",
+            CandidateFieldName.START_TIME,
+            "2030-05-06",
+        ),
+        (
+            "later-doors-open",
+            "Synthetic Test Notice",
+            "Test on 8 May 2030. Doors open at 08:00 UTC.",
+            CandidateFieldName.START_TIME,
+            "2030-05-08",
+        ),
+        (
+            "later-reference-deadline",
+            "Synthetic Assignment Notice",
+            ("Assignment deadline 9 May 2030. Reference materials are not due until 10 May 2030."),
+            CandidateFieldName.DUE_TIME,
+            "2030-05-09",
+        ),
+    )
+    for remote_key, title, body, field_name, expected_date in cases:
+        observed = harness.events.observe_announcement(
+            AnnouncementSourceRecord(
+                AnnouncementId("synthetic", remote_key),
+                harness.course_id,
+                title,
+                body,
+                Availability.ACTIVE,
+            ),
+            sync_run_key=_sync_run(harness.database),
+        )
+        candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+        temporal = candidate.field(field_name)
+        assert temporal is not None and temporal.value["date"] == expected_date  # type: ignore[index]
+        assert temporal.precision is TemporalPrecision.DATE_ONLY
+        assert candidate.field(CandidateFieldName.END_TIME) is None
+
+
+def test_ambiguous_dot_clock_ranges_do_not_create_clock_claims(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    cases = (
+        (
+            "descending-shared-meridiem",
+            "Synthetic Test Notice",
+            "Date: 6 June 2033\nTime: 11.00 to 1.00 pm",
+        ),
+        (
+            "unbounded-marks-range",
+            "Synthetic Exam Notice",
+            "Date: 7 June 2033\nMarks range: 2.30 to 4.00",
+        ),
+    )
+    for remote_key, title, body in cases:
+        observed = harness.events.observe_announcement(
+            AnnouncementSourceRecord(
+                AnnouncementId("synthetic", remote_key),
+                harness.course_id,
+                title,
+                body,
+                Availability.ACTIVE,
+            ),
+            sync_run_key=_sync_run(harness.database),
+        )
+        candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+        start = candidate.field(CandidateFieldName.START_TIME)
+        assert start is not None and start.precision is TemporalPrecision.DATE_ONLY
+        assert candidate.field(CandidateFieldName.END_TIME) is None
+
+
+def test_assignment_due_context_rejects_availability_dates_but_accepts_wrapped_date(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    availability = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "upload-availability"),
+            harness.course_id,
+            "Synthetic Assignment Presentation Files",
+            (
+                "Submit by the separately stated due dates.\n"
+                "The upload portal will be available from 2 July 2033, 3 July 2033, "
+                "and 4 July 2033, respectively."
+            ),
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+    wrapped = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "wrapped-topic-date"),
+            harness.course_id,
+            "Synthetic Assignment Topic Selection",
+            "Choose an invented topic according to\nyour preference, by 23 November\n2034.",
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+
+    assert harness.extractor.extract_observation(availability.observation.key).candidates == ()
+    candidate = harness.extractor.extract_observation(wrapped.observation.key).candidates[0]
+    due = candidate.field(CandidateFieldName.DUE_TIME)
+    assert due is not None and due.value["date"] == "2034-11-23"  # type: ignore[index]
+    assert "+" in due.source_path
+
+
+def test_context_does_not_promote_staff_office_to_event_location(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    observed = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "staff-office-location"),
+            harness.course_id,
+            "Synthetic Test Notice",
+            "Date: Tuesday, 7th May 2030\nLocation: Instructor Office 4",
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+
+    candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+
+    assert candidate.field(CandidateFieldName.START_TIME) is not None
+    assert candidate.field(CandidateFieldName.LOCATION) is None
+
+
+def test_text_rich_pdf_with_image_reports_native_extraction_limit(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    written = _ingest(
+        harness,
+        _text_rich_pdf_with_embedded_image(),
+        "native-plus-image",
+        "native-plus-image.pdf",
+    )
+    parsed = harness.parser.parse_version(written.version.key)
+
+    result = harness.extractor.extract_resource_version(written.version.key)
+
+    assert parsed.document.coverage.value == "COMPLETE"
+    assert len(result.candidates) == 1
+    with harness.database.connect() as connection:
+        extraction = connection.execute(
+            """SELECT status, warning_codes_json FROM extraction_record
+            WHERE extraction_record_key = ?""",
+            (result.extraction_record_key,),
+        ).fetchone()
+    assert extraction["status"] == "PARTIAL"
+    assert "embedded_visual_content_not_extracted" in json.loads(extraction["warning_codes_json"])
 
 
 def test_extraction_is_idempotent_per_parse_but_new_parse_input_is_reprocessed(
