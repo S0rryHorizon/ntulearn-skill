@@ -23,7 +23,8 @@ implemented in this phase.
 
 Implement the smallest validated vertical slices, preserving a standalone core and CLI with optional thin AI adapters.
 
-**Status:** Next; not started. The milestone order and acceptance criteria are defined in
+**Status:** In progress. M1 accepted; M2–M9 pending. See `implementation-status.md`.
+The milestone order and acceptance criteria are defined in
 `docs/architecture/testing-and-implementation.md`.
 
 ## Phase 4 — Validation
