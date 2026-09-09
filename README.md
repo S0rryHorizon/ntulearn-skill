@@ -2,27 +2,27 @@
 
 Local-first NTULearn course synchronization, indexing and retrieval for AI agents.
 
-> **Status: Phase 3 in progress — M1–M8 accepted.** Typed identities, private runtime
-> paths, SQLite migrations, immutable resources, PDF/DOCX parsing, classification, and local
-> chunk retrieval and deterministic FTS5 search are tested with synthetic data. Read-only sync works through
-> injected session and transport providers. Announcement/assessment observations and source-backed
-> event candidates and reconciled events with source-backed Claims, conflicts, and manual
-> decisions are available. Scoped incremental sync, freshness policies, and recoverable local
-> processing jobs are implemented; a concrete live NTULearn connection remains unvalidated.
+> **Status: Phase 3 implemented — M1–M9 accepted under synthetic tests.**
+> The standalone Python API and CLI provide local course/material queries, PDF/DOCX
+> parsing, deterministic FTS5 search, announcements, assessments, source-backed events,
+> conflicts and manual decisions. Incremental read-only sync runs through injected
+> session/transport providers. A thin Codex adapter calls the same core. Phase 4
+> validation and Phase 5 hardening remain pending; live NTULearn transport is not validated.
 
 ## Motivation
 
 Course information and learning resources are often scattered across pages, attachments, and deadlines. This project aims to create a private local mirror with traceable retrieval interfaces that work for people, command-line tools, and AI agents.
 
-## Planned capabilities
+## Implemented capabilities and deferred extensions
 
 - Synchronize authorized course information and attachments from NTULearn.
 - Parse common course documents and extract important academic events.
 - Maintain Course, Resource, and Event indexes with incremental updates.
-- Support full-text and semantic retrieval with source provenance.
-- Expose stable core and command-line interfaces plus thin Codex, ChatGPT, and other agent adapters.
+- Support deterministic full-text retrieval with source provenance; semantic retrieval is deferred.
+- Expose stable core and command-line interfaces plus a thin Codex adapter.
 
-These capabilities are plans, not current functionality.
+The capabilities accepted in Phase 3 are listed above. Semantic retrieval and a ChatGPT adapter
+remain deferred; they are not required by the standalone core.
 
 ## Architecture principles
 
@@ -47,7 +47,7 @@ See [data boundaries](docs/privacy/data-boundaries.md) before adding fixtures, l
 1. Phase 0 — Repository Bootstrap (complete)
 2. Phase 1 — NTULearn Reconnaissance (complete with documented limitations; private evidence)
 3. Phase 2 — Architecture Design (complete)
-4. Phase 3 — Implementation (M1–M8 complete; M9 pending)
+4. Phase 3 — Implementation (M1–M9 complete under synthetic acceptance)
 5. Phase 4 — Validation
 6. Phase 5 — Open-source Hardening
 

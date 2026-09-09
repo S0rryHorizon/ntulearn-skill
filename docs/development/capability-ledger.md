@@ -19,7 +19,7 @@ otherwise. Private evidence belongs only in `.local/` or the private runtime roo
 | Signed route lifetime | UNKNOWN | Acquire route only for an active fetch | Bounded resource retrieval | Never persist route |
 
 Live checks of course discovery, content traversal, announcements, assessments/due
-reads, and resource retrieval are pending implementation. They are required to
+reads, and resource retrieval require a usable authorized transport for current live validation. They are required to
 characterize real usability separately from the public synthetic suite.
 
 ## Current live transport gate
@@ -97,3 +97,20 @@ service contract fails safely; a current plan creates the appropriate new input 
 Bounded/uncompleted processing and postcommit receipt, job, or browse repair gaps produce
 partial scope results. Repeated identical source snapshots reuse their first exact
 observation provenance while current freshness is recorded separately.
+
+## Public interfaces
+
+M9 provides a versioned result envelope through the standalone Python CoreService,
+CLI JSON/human output, and one thin Codex tool dispatcher. The CLI uses explicit local
+keys; no LLM package is required. Default runtime storage is private and local paths
+are returned only on explicit resource-path requests. Unconfigured sync returns a
+safe configuration error; no automatic browser/SSO executor is bundled.
+
+Queries preserve exact-scope freshness, source references, field conflicts, incomplete
+event processing and temporal uncertainty. Explicit historical version queries do not
+access the source. One permitted refresh cycle may discover new courses while leaving
+their unobserved scopes UNKNOWN. WEEK_ONLY or missing event times remain visible with
+partial coverage. Floating dates use conservative bounds rather than an invented timezone.
+
+The Codex dispatcher is a Python integration surface, not an installed plugin or an
+LLM-backed agent. Semantic search and the ChatGPT integration remain deferred.

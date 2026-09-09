@@ -1,6 +1,5 @@
-"""Command-line entry point reserved for later phases."""
+"""Privacy-safe command-line adapter for the stable local core API."""
 
+from ntulearn_skill.cli._main import main, run
 
-def main() -> None:
-    """Report that the project has not implemented CLI behavior yet."""
-    raise SystemExit("ntulearn-skill is in Phase 0; CLI commands are not implemented yet.")
+__all__ = ["main", "run"]

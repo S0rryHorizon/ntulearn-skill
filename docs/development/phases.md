@@ -23,7 +23,8 @@ implemented in this phase.
 
 Implement the smallest validated vertical slices, preserving a standalone core and CLI with optional thin AI adapters.
 
-**Status:** In progress. M1–M8 accepted; M9 pending. See `implementation-status.md`.
+**Status:** Complete under synthetic implementation acceptance. M1–M9 accepted; real
+transport compatibility remains a separate Phase 4 gate. See `implementation-status.md`.
 The milestone order and acceptance criteria are defined in
 `docs/architecture/testing-and-implementation.md`.
 
