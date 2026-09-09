@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from ntulearn_skill.client import (
     SourceError,
     SourceProtocolError,
     SourceProvider,
+    safe_source_error_category,
 )
 from ntulearn_skill.core import AttachmentId, Availability, ContentId, CourseId
 from ntulearn_skill.core.identifiers import require_identifier
@@ -37,6 +37,11 @@ from ntulearn_skill.storage.resources import (
     ResourceStorageError,
     ResourceStore,
     ResourceVersionRecord,
+    _persisted_resource_metadata,
+    _persisted_resource_text,
+    _sanitize_resource_metadata,
+    _sanitize_resource_text,
+    _SanitizedResourceMetadata,
 )
 from ntulearn_skill.sync.jobs import LocalJobPlanner, ResourceJobPlan
 
@@ -88,7 +93,7 @@ class _ResolvedEvidence:
     content_id: ContentId
     course_id: CourseId
     availability: Availability
-    sanitized_metadata: dict[str, object]
+    sanitized_metadata: _SanitizedResourceMetadata
     candidate_modified_at: str | None
     candidate_revision: str | None
     metadata_fingerprint: str
@@ -138,12 +143,17 @@ class ResourceFetchService:
 
         evidence: _ResolvedEvidence | None = None
         try:
-            metadata = (
-                resource
-                if isinstance(resource, ResourceMetadataRecord)
-                else self._metadata(resource)
+            if isinstance(resource, ResourceMetadataRecord):
+                metadata = resource
+                canonical_metadata = None
+            else:
+                metadata, canonical_metadata = self._metadata(resource)
+            evidence = self._resolve_evidence(
+                metadata,
+                content,
+                course,
+                canonical_metadata=canonical_metadata,
             )
-            evidence = self._resolve_evidence(metadata, content, course)
             current = self.store.repository.get_current_version(attachment_id)
             basis = self._comparison_basis(attachment_id, current)
             reason = self._policy_reason(evidence, current, basis, verify=verify, observed_at=clock)
@@ -227,15 +237,27 @@ class ResourceFetchService:
             )
         except SessionExpired as error:
             try:
-                self.sessions.invalidate(error.category)
+                self.sessions.invalidate(SessionExpired.category)
             except Exception:
                 # Invalidation is best-effort cleanup owned by the session provider.  Its
                 # diagnostics may contain private auth state, so retain only the original safe
                 # source category and continue through the normal durable failure path.
                 pass
-            return self._failed(attachment_id, evidence, sync_run_key, clock, error.category)
+            return self._failed(
+                attachment_id,
+                evidence,
+                sync_run_key,
+                clock,
+                safe_source_error_category(error.category),
+            )
         except SourceError as error:
-            return self._failed(attachment_id, evidence, sync_run_key, clock, error.category)
+            return self._failed(
+                attachment_id,
+                evidence,
+                sync_run_key,
+                clock,
+                safe_source_error_category(error.category),
+            )
         except (ResourceStorageError, sqlite3.Error, OSError, TypeError, ValueError):
             return self._failed(
                 attachment_id, evidence, sync_run_key, clock, "resource_storage_error"
@@ -243,7 +265,9 @@ class ResourceFetchService:
         except Exception:
             return self._failed(attachment_id, evidence, sync_run_key, clock, "source_unavailable")
 
-    def _metadata(self, attachment_id: AttachmentId) -> ResourceMetadataRecord:
+    def _metadata(
+        self, attachment_id: AttachmentId
+    ) -> tuple[ResourceMetadataRecord, _SanitizedResourceMetadata | None]:
         local = self._local_metadata(attachment_id)
         if local is not None:
             return local
@@ -252,9 +276,11 @@ class ResourceFetchService:
         result = self.source.get_resource_metadata(session, attachment_id)
         if type(result) is not ResourceMetadataRecord or result.remote_id != attachment_id:
             raise SourceProtocolError()
-        return result
+        return result, None
 
-    def _local_metadata(self, attachment_id: AttachmentId) -> ResourceMetadataRecord | None:
+    def _local_metadata(
+        self, attachment_id: AttachmentId
+    ) -> tuple[ResourceMetadataRecord, _SanitizedResourceMetadata] | None:
         connection = self.store.repository.database.connect()
         try:
             row = connection.execute(
@@ -285,8 +311,11 @@ class ResourceFetchService:
             ).fetchone()
             if row is None:
                 return None
-            metadata = json.loads(str(row["sanitized_metadata_json"]))
-            declared_mime = metadata.get("content_type") if isinstance(metadata, dict) else None
+            metadata_value = json.loads(str(row["sanitized_metadata_json"]))
+            if not isinstance(metadata_value, dict):
+                raise ValueError("stored resource metadata is invalid")
+            metadata = _persisted_resource_metadata(metadata_value)
+            declared_mime = metadata.get("content_type")
             if declared_mime is not None and not isinstance(declared_mime, str):
                 raise ValueError("stored resource content type is invalid")
             modified = (
@@ -294,13 +323,16 @@ class ResourceFetchService:
                 if row["candidate_modified_at"] is None
                 else from_storage_time(str(row["candidate_modified_at"]))
             )
-            return ResourceMetadataRecord(
-                attachment_id,
-                ContentId(str(row["content_provider"]), str(row["content_remote"])),
-                str(row["display_title"]),
-                str(row["original_filename"]),
-                declared_mime,
-                modified,
+            return (
+                ResourceMetadataRecord(
+                    attachment_id,
+                    ContentId(str(row["content_provider"]), str(row["content_remote"])),
+                    _persisted_resource_text(str(row["display_title"])),
+                    _persisted_resource_text(str(row["original_filename"])),
+                    declared_mime,
+                    modified,
+                ),
+                metadata,
             )
         finally:
             connection.close()
@@ -320,6 +352,8 @@ class ResourceFetchService:
         metadata: ResourceMetadataRecord,
         content: ContentSourceRecord | ContentId | None,
         course: CourseSourceRecord | CourseId | None,
+        *,
+        canonical_metadata: _SanitizedResourceMetadata | None = None,
     ) -> _ResolvedEvidence:
         if (
             type(metadata) is not ResourceMetadataRecord
@@ -330,6 +364,18 @@ class ResourceFetchService:
             or not metadata.display_title.strip()
             or not metadata.original_filename
         ):
+            raise SourceProtocolError()
+        metadata = ResourceMetadataRecord(
+            metadata.remote_id,
+            metadata.content_id,
+            _sanitize_resource_text(metadata.display_title),
+            _sanitize_resource_text(metadata.original_filename),
+            None
+            if metadata.declared_mime is None
+            else _sanitize_resource_text(metadata.declared_mime),
+            metadata.candidate_modified_at,
+        )
+        if not metadata.display_title or not metadata.original_filename:
             raise SourceProtocolError()
         if type(content) is ContentSourceRecord:
             if content.remote_id != metadata.content_id:
@@ -382,11 +428,9 @@ class ResourceFetchService:
             if metadata.candidate_modified_at is None
             else to_storage_time(metadata.candidate_modified_at)
         )
-        sanitized: dict[str, object] = {
-            "content_type": metadata.declared_mime,
-            "display_name": metadata.display_title,
-        }
-        encoded = json.dumps(sanitized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        sanitized = canonical_metadata or _sanitize_resource_metadata(
+            {"content_type": metadata.declared_mime, "display_name": metadata.display_title}
+        )
         return _ResolvedEvidence(
             metadata,
             content_id,
@@ -395,7 +439,7 @@ class ResourceFetchService:
             sanitized,
             candidate_modified,
             None,
-            hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+            sanitized.fingerprint,
         )
 
     def _local_course_id(self, content_id: ContentId) -> CourseId:

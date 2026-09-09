@@ -13,13 +13,13 @@ human gate: no remote creation, push, or package publication is authorized.
 | M6 Event candidates | PASS | `c2fa638` | 180 tests; lint/format; strict types; compile; wheel/sdist; independent + source critical review PASS | Bounded English extraction; schedule adapter UNKNOWN; due-calendar source times not assumed to be due times |
 | M7 Reconciliation | PASS | `6d643e5` | 277 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | Bounded affirmative English changes; manual reassignment of an already-bound source is rejected; local decisions are not indexed as source evidence |
 | M8 Incremental sync | PASS | `07a5074` | 362 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | Explicit scoped freshness; resource-only omission inference; queued contract changes fail safely and require current replanning; live transport remains unvalidated |
-| M9 Core / CLI / integration | PASS | this commit | 432 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | Versioned Python/CLI/Codex envelopes; local keys in CLI; live sync requires an injected authorized engine; uncertain times and unlinked changes remain partial |
+| M9 Core / CLI / integration | PASS | `da72f52` | 432 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | Versioned Python/CLI/Codex envelopes; local keys in CLI; live sync requires an injected authorized engine; uncertain times and unlinked changes remain partial |
 
 ## Phase gates
 
 - Phase 3: PASS (M1–M9 synthetic implementation acceptance).
-- Phase 4 validation: PENDING.
-- Phase 5 open-source hardening: PENDING.
+- Phase 4: synthetic and runtime safety PASS (445 tests; independent safety review PASS); private live transport BLOCKED_BY_CLIENT. The aggregate live-validation gate is not PASS.
+- Phase 5: independent open-source hardening work pending; release gate remains blocked by private live validation.
 - Public release readiness: NOT READY.
 
 Acceptance requires executed tests, independent review, architecture regression

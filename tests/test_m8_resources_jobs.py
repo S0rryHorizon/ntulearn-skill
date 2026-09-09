@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -240,6 +240,88 @@ def test_verification_interval_uses_last_verified_observation_clock(tmp_path: Pa
     ]
     assert receipts[0]["verified_at"] == receipts[1]["verified_at"]
     assert receipts[2]["verified_at"] == verified_at.isoformat(timespec="microseconds")
+
+
+def test_resource_policy_compares_the_same_sanitized_metadata_that_is_persisted(
+    tmp_path: Path,
+) -> None:
+    payload = _pdf("Invented stable bytes")
+    harness = _harness(tmp_path, [payload])
+    first_at = datetime(2027, 1, 10, tzinfo=UTC)
+    token_one = replace(
+        harness.metadata,
+        display_title=(
+            "Synthetic Slides https://download.example.invalid/file?token=SYNTHETIC-TOKEN-ONE"
+        ),
+    )
+    whitespace_variant = replace(
+        harness.metadata,
+        display_title=(
+            "  Synthetic   Slides   https://download.example.invalid/file?token=SYNTHETIC-TOKEN-ONE"
+        ),
+    )
+    token_two = replace(
+        harness.metadata,
+        display_title=(
+            "Synthetic Slides https://download.example.invalid/file?token=SYNTHETIC-TOKEN-TWO"
+        ),
+    )
+
+    first = harness.service.fetch(
+        token_one,
+        sync_run_key=_run(harness.database, first_at),
+        observed_at=first_at,
+    )
+    repeated = harness.service.fetch(
+        whitespace_variant,
+        sync_run_key=_run(harness.database, first_at + timedelta(minutes=5)),
+        observed_at=first_at + timedelta(minutes=5),
+    )
+    rotated = harness.service.fetch(
+        token_two,
+        sync_run_key=_run(harness.database, first_at + timedelta(minutes=10)),
+        observed_at=first_at + timedelta(minutes=10),
+    )
+
+    assert first.outcome == "NEW_VERSION"
+    assert repeated.outcome == rotated.outcome == "UNCHANGED_ASSUMED"
+    assert first.version == repeated.version == rotated.version
+    assert harness.source.stream_calls == 1
+    assert len(harness.service.store.repository.list_versions(harness.metadata.remote_id)) == 1
+
+
+def test_canonical_resource_metadata_is_reused_for_id_only_fetches(tmp_path: Path) -> None:
+    payload = _pdf("Invented stable bytes")
+    harness = _harness(tmp_path, [payload])
+    first_at = datetime(2027, 1, 10, tzinfo=UTC)
+    encoded_title = replace(
+        harness.metadata,
+        display_title="Synthetic &lt;Slides&gt;",
+    )
+
+    first = harness.service.fetch(
+        encoded_title,
+        sync_run_key=_run(harness.database, first_at),
+        observed_at=first_at,
+    )
+    repeated = harness.service.fetch(
+        encoded_title.remote_id,
+        sync_run_key=_run(harness.database, first_at + timedelta(minutes=5)),
+        observed_at=first_at + timedelta(minutes=5),
+    )
+    third = harness.service.fetch(
+        encoded_title.remote_id,
+        sync_run_key=_run(harness.database, first_at + timedelta(minutes=10)),
+        observed_at=first_at + timedelta(minutes=10),
+    )
+
+    assert first.outcome == "NEW_VERSION"
+    assert repeated.outcome == third.outcome == "UNCHANGED_ASSUMED"
+    assert first.version == repeated.version == third.version
+    assert harness.source.stream_calls == 1
+    assert harness.source.metadata_calls == 0
+    stored = harness.service.store.repository.get_resource(encoded_title.remote_id)
+    assert stored is not None and stored.display_title == "Synthetic <Slides>"
 
 
 def test_same_metadata_can_produce_binary_changed_after_forced_verification(

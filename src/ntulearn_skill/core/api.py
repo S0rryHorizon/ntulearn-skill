@@ -16,6 +16,7 @@ from ntulearn_skill.client import (
     SourceError,
     TimeWindow,
     UnsupportedCapability,
+    safe_source_error_category,
 )
 from ntulearn_skill.core.identifiers import AttachmentId, CourseId, require_identifier
 from ntulearn_skill.core.models import (
@@ -1967,7 +1968,11 @@ class CoreService:
         code = "operation_failed"
         retryable = False
         message = "The local operation could not be completed."
-        source_category = getattr(error, "category", None)
+        source_category = (
+            safe_source_error_category(getattr(error, "category", None))
+            if isinstance(error, SourceError)
+            else None
+        )
         if (
             isinstance(error, AuthenticationRequired)
             or source_category == "authentication_required"
@@ -1996,7 +2001,7 @@ class CoreService:
         elif isinstance(error, SourceError):
             category, code, retryable, message = (
                 ErrorCategory.SOURCE_UNAVAILABLE,
-                str(source_category or "source_unavailable"),
+                source_category or "source_unavailable",
                 True,
                 "The source read could not be completed.",
             )
@@ -2057,11 +2062,30 @@ class CoreService:
                 "The source read could not be completed.",
             ),
         }
+        for source_code in (
+            "source_error",
+            "source_access_denied",
+            "read_policy_violation",
+            "source_protocol_error",
+            "pagination_limit_reached",
+            "pagination_cycle",
+            "course_not_observed",
+            "content_node_limit_reached",
+            "assessment_limit_reached",
+            "resource_storage_error",
+            "sync_engine_error",
+        ):
+            mapping[source_code] = (
+                ErrorCategory.SOURCE_UNAVAILABLE,
+                True,
+                "The source read could not be completed.",
+            )
+        safe_code = code if code in mapping else "source_unavailable"
         category, retryable, message = mapping.get(
-            code,
+            safe_code,
             (ErrorCategory.SOURCE_UNAVAILABLE, True, "The source read could not be completed."),
         )
-        return SafeError(category, code, message, operation, scope, retryable, Coverage.FAILED)
+        return SafeError(category, safe_code, message, operation, scope, retryable, Coverage.FAILED)
 
     def _refresh_result_errors(
         self, operation: str, result: SyncRunResult

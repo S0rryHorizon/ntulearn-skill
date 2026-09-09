@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+from ntulearn_skill.cli import run as run_cli
 from ntulearn_skill.client import (
+    AuthenticationRequired,
     AuthorizedReadSession,
     CapabilityState,
     ContentSourceRecord,
@@ -19,9 +25,12 @@ from ntulearn_skill.client import (
     SessionStatus,
     SourceCapabilities,
     SourceCapability,
+    SourceUnavailable,
     WireResponse,
 )
 from ntulearn_skill.core import AttachmentId, Availability, ContentId, CourseId, Coverage
+from ntulearn_skill.core.api import CoreService, FreshnessRequirement
+from ntulearn_skill.integrations.codex import CodexToolDispatcher
 from ntulearn_skill.storage import Database, DomainRepository, ResourceRepository
 from ntulearn_skill.sync import DiscoverySync, SyncWarning
 
@@ -398,3 +407,213 @@ def test_unexpected_provider_failure_finishes_run_with_safe_category(tmp_path: P
     assert row is not None
     assert row["status"] == "FAILED"
     assert row["ended_at"] is not None
+
+
+@pytest.mark.parametrize(
+    ("error", "category"),
+    [
+        (AuthenticationRequired(), "authentication_required"),
+        (SessionExpired(), "session_expired"),
+        (RuntimeError("SYNTHETIC-PHASE4-ACQUIRE-CANARY"), "source_unavailable"),
+    ],
+)
+def test_initial_session_failure_finishes_run_without_entering_content(
+    tmp_path: Path, error: Exception, category: str
+) -> None:
+    class FailingSessions(FakeSessions):
+        def acquire(self, purpose: ReadPurpose) -> AuthorizedReadSession:
+            del purpose
+            raise error
+
+    source = FakeSource()
+    repository = _repository(tmp_path)
+
+    result = DiscoverySync(sessions=FailingSessions(), source=source, repository=repository).run()
+
+    assert result.status.value == "FAILED"
+    assert result.error_category == category
+    assert result.counts["courses_observed"] == 0
+    assert result.counts["content_observed"] == 0
+    assert result.scopes[0].failure_category == category
+    assert "SYNTHETIC-PHASE4-ACQUIRE-CANARY" not in repr(result)
+    connection = repository.database.connect()
+    try:
+        row = connection.execute(
+            "SELECT status, ended_at, error_category FROM sync_run WHERE sync_run_key = ?",
+            (result.key,),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    assert tuple(row) == ("FAILED", row["ended_at"], category)
+    assert row["ended_at"] is not None
+
+
+def test_source_descriptive_text_is_sanitized_at_every_discovery_persistence_boundary(
+    tmp_path: Path,
+) -> None:
+    canary = "SYNTHETIC-PHASE4-TEXT-CANARY"
+    unsafe_url = (
+        f"https://student:{canary}@download.example.invalid/material?token={canary}#{canary}"
+    )
+    source = FakeSource()
+    repository = _repository(tmp_path)
+    course = CourseSourceRecord(
+        CourseId("synthetic", "course-safe-id"),
+        f"PH0000 {unsafe_url}",
+        f"Example {unsafe_url}",
+        f"Synthetic Term {unsafe_url}",
+        Availability.ACTIVE,
+    )
+    resource = ResourceMetadataRecord(
+        AttachmentId("synthetic", "attachment-safe-id"),
+        ContentId("synthetic", "content-safe-id"),
+        f"Slides {unsafe_url}",
+        f"slides {unsafe_url}",
+        f"application/pdf {unsafe_url}",
+    )
+    content = ContentSourceRecord(
+        resource.content_id,
+        course.remote_id,
+        None,
+        f"document {unsafe_url}",
+        f"Week 1 {unsafe_url}",
+        0,
+        Availability.ACTIVE,
+        False,
+        {
+            "content_type": f"document {unsafe_url}",
+            "display_style": f"list {unsafe_url}",
+            "module_label": f"Module A {unsafe_url}",
+        },
+        (resource,),
+    )
+    source.course_pages = {None: Page((course,), None, Coverage.COMPLETE)}
+    source.content_pages = {
+        (course.remote_id, None, None): Page((content,), None, Coverage.COMPLETE)
+    }
+
+    result = DiscoverySync(sessions=FakeSessions(), source=source, repository=repository).run()
+
+    assert result.status.value == "SUCCEEDED"
+    stored_course = repository.get_course(course.remote_id)
+    stored_content = repository.get_content_node(content.remote_id)
+    stored_resource = ResourceRepository(repository.database).get_resource(resource.remote_id)
+    assert stored_course is not None and stored_content is not None
+    assert stored_resource is not None
+    assert stored_course.remote_id == course.remote_id
+    assert stored_content.remote_id == content.remote_id
+    assert stored_resource.remote_id == resource.remote_id
+    assert "https://download.example.invalid/material" in stored_course.title
+    assert canary not in repr((stored_course, stored_content, stored_resource))
+    connection = repository.database.connect()
+    try:
+        durable_sql = "\n".join(connection.iterdump())
+    finally:
+        connection.close()
+    assert canary not in durable_sql
+
+
+def test_real_adapter_course_title_url_secrets_do_not_reach_storage(tmp_path: Path) -> None:
+    canary = "SYNTHETIC-PHASE4-ADAPTER-CANARY"
+
+    def executor(
+        request: ResolvedReadRequest,
+        session: AuthorizedReadSession,
+        forward_credentials: bool,
+    ) -> WireResponse:
+        del session, forward_credentials
+        if request.target.endswith("/memberships"):
+            return WireResponse(
+                200,
+                json_body={
+                    "results": [
+                        {
+                            "isAvailable": True,
+                            "course": {
+                                "id": "course-adapter-safe-id",
+                                "courseId": "PH0000",
+                                "displayName": (
+                                    f"Example https://download.example.invalid/file?token={canary}"
+                                ),
+                            },
+                        }
+                    ],
+                    "paging": {"limit": 100, "offset": 0, "count": 1, "nextPage": None},
+                },
+            )
+        return WireResponse(
+            200,
+            json_body={
+                "results": [],
+                "paging": {"limit": 100, "offset": 0, "count": 0, "nextPage": None},
+            },
+        )
+
+    repository = _repository(tmp_path)
+    adapter = NtulearnSourceAdapter(
+        ReadOnlyTransport(executor), source_origin="https://learn.example.invalid"
+    )
+
+    result = DiscoverySync(
+        sessions=FakeSessions(provider_name="ntulearn"),
+        source=adapter,
+        repository=repository,
+    ).run()
+
+    assert result.status.value == "SUCCEEDED"
+    course = repository.get_course(CourseId("ntulearn", "course-adapter-safe-id"))
+    assert course is not None
+    assert course.title == "Example https://download.example.invalid/file"
+    assert canary not in repr(CoreService(repository.database).list_courses().to_dict())
+
+
+def test_untrusted_source_error_category_is_fixed_in_storage_and_public_results(
+    tmp_path: Path,
+) -> None:
+    canary = "SYNTHETIC-PHASE4-CATEGORY-CANARY"
+
+    def fail_with_untrusted_category(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        error = SourceUnavailable()
+        error.category = f"source_unavailable?token={canary}"
+        raise error
+
+    source = FakeSource()
+    source.course_pages = {None: SourceUnavailable()}
+    source.course_pages[None].category = f"source_unavailable?token={canary}"  # type: ignore[union-attr]
+    repository = _repository(tmp_path)
+    result = DiscoverySync(sessions=FakeSessions(), source=source, repository=repository).run(
+        include_content=False
+    )
+
+    assert result.error_category == "source_unavailable"
+    assert result.scopes[0].failure_category == "source_unavailable"
+    connection = repository.database.connect()
+    try:
+        durable_sql = "\n".join(connection.iterdump())
+    finally:
+        connection.close()
+    assert canary not in durable_sql
+
+    engine = SimpleNamespace(
+        domain=repository,
+        source=SimpleNamespace(provider_name="synthetic"),
+        refresh_scope=fail_with_untrusted_category,
+    )
+    core = CoreService(repository.database, sync_engine=engine)  # type: ignore[arg-type]
+    core_payload = core.list_courses(freshness=FreshnessRequirement.require_current()).to_dict()
+    assert core_payload["errors"][0]["code"] == "source_unavailable"  # type: ignore[index]
+    output = io.StringIO()
+    assert (
+        run_cli(
+            ["--json", "courses", "--freshness", "require-current"],
+            service=core,
+            stdout=output,
+        )
+        == 1
+    )
+    codex_payload = CodexToolDispatcher(core).call(
+        "list_courses", {"freshness": {"mode": "require_current"}}
+    )
+    assert canary not in repr((core_payload, output.getvalue(), codex_payload))

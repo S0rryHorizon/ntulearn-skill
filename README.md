@@ -7,7 +7,8 @@ Local-first NTULearn course synchronization, indexing and retrieval for AI agent
 > parsing, deterministic FTS5 search, announcements, assessments, source-backed events,
 > conflicts and manual decisions. Incremental read-only sync runs through injected
 > session/transport providers. A thin Codex adapter calls the same core. Phase 4
-> validation and Phase 5 hardening remain pending; live NTULearn transport is not validated.
+> synthetic/runtime validation passed. Live NTULearn transport remains blocked and
+> unvalidated; independent open-source hardening is next. Public release is NOT READY.
 
 ## Motivation
 

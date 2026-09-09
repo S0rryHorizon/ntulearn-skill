@@ -22,6 +22,7 @@ from ntulearn_skill.client import (
     SourceProtocolError,
     SourceProvider,
     SourceUnavailable,
+    safe_source_error_category,
 )
 from ntulearn_skill.core import (
     AttachmentId,
@@ -107,7 +108,7 @@ class DiscoverySync:
             "scopes_failed": 0,
         }
         scopes: list[ScopeResult] = []
-        courses: list[CourseSourceRecord]
+        courses: list[CourseSourceRecord] = []
 
         if not self._supported(SourceCapability.COURSE_DISCOVERY):
             course_scope = self._unsupported_scope("courses", None)
@@ -120,7 +121,9 @@ class DiscoverySync:
                 )
             except SourceError as error:
                 self._invalidate_if_expired(error)
-                course_scope = self._failed_scope("courses", None, error.category)
+                course_scope = self._failed_scope(
+                    "courses", None, safe_source_error_category(error.category)
+                )
         scopes.append(course_scope)
         self.recorder.record_scope(run_key, course_scope)
         counts["courses_observed"] = course_scope.items_seen
@@ -137,7 +140,11 @@ class DiscoverySync:
                 except SourceError as error:
                     self._invalidate_if_expired(error)
                     for course in courses:
-                        scope = self._failed_scope("content", course.remote_id, error.category)
+                        scope = self._failed_scope(
+                            "content",
+                            course.remote_id,
+                            safe_source_error_category(error.category),
+                        )
                         scopes.append(scope)
                         self.recorder.record_scope(run_key, scope)
                 else:
@@ -227,7 +234,9 @@ class DiscoverySync:
                     session = self._acquire(ReadPurpose.CONTENT)
                 except SourceError as error:
                     self._invalidate_if_expired(error)
-                    content_scope = self._failed_scope("content", course, error.category)
+                    content_scope = self._failed_scope(
+                        "content", course, safe_source_error_category(error.category)
+                    )
                 else:
                     content_scope, _ = self._content(
                         run_key,
@@ -267,7 +276,9 @@ class DiscoverySync:
             except SourceError as error:
                 self._invalidate_if_expired(error)
                 courses = []
-                scope = self._failed_scope("courses", None, error.category)
+                scope = self._failed_scope(
+                    "courses", None, safe_source_error_category(error.category)
+                )
             else:
                 courses, scope = self._courses(session, page_size, max_pages_per_scope)
         return tuple(courses), scope
@@ -581,7 +592,7 @@ class DiscoverySync:
     def _source_failure(progress: _Progress, error: SourceError) -> None:
         progress.coverage = Coverage.PARTIAL if progress.pages_seen else Coverage.FAILED
         progress.pagination_complete = False
-        progress.failure_category = error.category
+        progress.failure_category = safe_source_error_category(error.category)
         progress.warn(SyncWarning.SOURCE_FAILURE)
 
     def _scope(self, data_kind: str, course: CourseId | None, progress: _Progress) -> ScopeResult:
@@ -647,6 +658,6 @@ class DiscoverySync:
         if not isinstance(error, SessionExpired):
             return
         try:
-            self.sessions.invalidate(error.category)
+            self.sessions.invalidate(SessionExpired.category)
         except Exception:
             pass

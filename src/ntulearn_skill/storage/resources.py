@@ -14,10 +14,11 @@ import unicodedata
 import uuid
 import xml.etree.ElementTree as element_tree
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import BinaryIO
 
 from ntulearn_skill.core.identifiers import AttachmentId, ContentId, require_identifier
@@ -30,6 +31,7 @@ from ntulearn_skill.core.models import (
     to_storage_time,
     utc_now,
 )
+from ntulearn_skill.core.text import sanitize_source_text
 from ntulearn_skill.storage.database import Database, StorageError
 from ntulearn_skill.storage.migration import MigrationRunner
 from ntulearn_skill.storage.paths import RuntimePaths, ensure_private_directory
@@ -111,16 +113,106 @@ class ResourceWriteResult:
     warning: str | None = None
 
 
-def _safe_metadata(value: Mapping[str, object]) -> tuple[str, str]:
+class _SanitizedResourceText(str):
+    """Marker for source text that has already crossed the resource boundary."""
+
+
+@dataclass(frozen=True, slots=True)
+class _SanitizedResourceMetadata(Mapping[str, object]):
+    """Canonical metadata carried unchanged from policy comparison into storage."""
+
+    _items: Mapping[str, object]
+    encoded: str
+    fingerprint: str
+
+    def __post_init__(self) -> None:
+        copied = _resource_metadata_values(self._items)
+        if any(
+            isinstance(item, str) and not isinstance(item, _SanitizedResourceText)
+            for item in copied.values()
+        ):
+            raise ValueError("sanitized resource metadata requires canonical source text")
+        encoded = json.dumps(copied, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        if self.encoded != encoded or self.fingerprint != fingerprint:
+            raise ValueError("sanitized resource metadata is inconsistent")
+        object.__setattr__(self, "_items", MappingProxyType(copied))
+
+    def __getitem__(self, key: str) -> object:
+        return self._items[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
+def _sanitize_resource_text(value: str) -> str:
+    """Sanitize source text once while retaining an internal canonical marker."""
+
+    if isinstance(value, _SanitizedResourceText):
+        return value
+    return _SanitizedResourceText(sanitize_source_text(value))
+
+
+def _persisted_resource_text(value: str) -> str:
+    """Mark text loaded from the sanitized private store without transforming it again."""
+
+    return _SanitizedResourceText(value)
+
+
+def _resource_metadata_values(value: Mapping[str, object]) -> dict[str, object]:
     if not set(value).issubset(_RESOURCE_METADATA_FIELDS):
         raise ValueError("resource metadata contains a field outside the allowlist")
     if any(not isinstance(item, _JSON_SCALARS) for item in value.values()):
         raise ValueError("resource metadata values must be JSON scalar values")
+    return dict(value)
+
+
+def _sanitize_resource_metadata(
+    value: Mapping[str, object],
+) -> _SanitizedResourceMetadata:
+    """Canonicalize allowlisted source metadata and return its durable fingerprint."""
+
+    if isinstance(value, _SanitizedResourceMetadata):
+        return value
+    sanitized = {
+        key: _sanitize_resource_text(item) if isinstance(item, str) else item
+        for key, item in _resource_metadata_values(value).items()
+    }
     try:
-        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        encoded = json.dumps(sanitized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     except (TypeError, ValueError):
         raise ValueError("resource metadata must be JSON-serializable") from None
-    return encoded, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return _SanitizedResourceMetadata(
+        MappingProxyType(sanitized),
+        encoded,
+        hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    )
+
+
+def _persisted_resource_metadata(value: Mapping[str, object]) -> _SanitizedResourceMetadata:
+    """Restore a canonical metadata snapshot already validated by private storage."""
+
+    persisted = {
+        key: _persisted_resource_text(item) if isinstance(item, str) else item
+        for key, item in _resource_metadata_values(value).items()
+    }
+    try:
+        encoded = json.dumps(persisted, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    except (TypeError, ValueError):
+        raise ValueError("resource metadata must be JSON-serializable") from None
+    return _SanitizedResourceMetadata(
+        MappingProxyType(persisted),
+        encoded,
+        hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    )
+
+
+def _safe_metadata(value: Mapping[str, object]) -> tuple[str, str]:
+    sanitized = _sanitize_resource_metadata(value)
+    return sanitized.encoded, sanitized.fingerprint
 
 
 def _safe_component(value: str, *, fallback: str, max_bytes: int) -> str:
@@ -555,7 +647,13 @@ class ResourceRepository:
         require_identifier(content_id, ContentId)
         if sync_run_key <= 0:
             raise ValueError("sync_run_key must be positive")
-        if not display_title.strip():
+        display_title = _sanitize_resource_text(display_title)
+        original_filename = _sanitize_resource_text(original_filename)
+        candidate_revision = (
+            None if candidate_revision is None else _sanitize_resource_text(candidate_revision)
+        )
+        declared_mime = None if declared_mime is None else _sanitize_resource_text(declared_mime)
+        if not display_title or not original_filename:
             raise ValueError("display title must be non-empty")
         metadata_json, fingerprint = _safe_metadata(sanitized_metadata or {})
         timestamp = to_storage_time(observed_at or utc_now())
@@ -970,6 +1068,7 @@ class ResourceStore:
                 os.fsync(target.fileno())
             file_format = detect_file_format(temporary)
             content_hash = digest.hexdigest()
+            original_filename = _sanitize_resource_text(original_filename)
             filename = safe_filename(original_filename, file_format)
             blob_relpath = str(
                 PurePosixPath("objects")

@@ -15,6 +15,7 @@ from ntulearn_skill.core.models import (
     to_storage_time,
     utc_now,
 )
+from ntulearn_skill.core.text import sanitize_source_text
 from ntulearn_skill.storage.database import Database, StorageError
 from ntulearn_skill.storage.migration import MigrationRunner
 
@@ -54,8 +55,12 @@ def _safe_json(value: Mapping[str, object]) -> str:
         raise ValueError("metadata contains a field outside the public allowlist")
     if any(not isinstance(item, _JSON_SCALARS) for item in value.values()):
         raise ValueError("metadata values must be JSON scalar values")
+    sanitized = {
+        key: sanitize_source_text(item) if isinstance(item, str) else item
+        for key, item in value.items()
+    }
     try:
-        return json.dumps(dict(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return json.dumps(sanitized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     except (TypeError, ValueError):
         raise ValueError("metadata must be JSON-serializable") from None
 
@@ -160,7 +165,10 @@ class DomainRepository:
         observed_at: datetime | None = None,
     ) -> CourseRecord:
         require_identifier(remote_id, CourseId)
-        if not code.strip() or not title.strip():
+        code = sanitize_source_text(code)
+        title = sanitize_source_text(title)
+        term = None if term is None else sanitize_source_text(term) or None
+        if not code or not title:
             raise ValueError("course code and title must be non-empty")
         timestamp = to_storage_time(observed_at or utc_now())
         try:
@@ -255,7 +263,9 @@ class DomainRepository:
         require_identifier(course_id, CourseId)
         if parent_id is not None:
             require_identifier(parent_id, ContentId)
-        if position < 0 or not handler_kind.strip() or not title.strip():
+        handler_kind = sanitize_source_text(handler_kind)
+        title = sanitize_source_text(title)
+        if position < 0 or not handler_kind or not title:
             raise ValueError("content fields are invalid")
         metadata_json = _safe_json(sanitized_metadata or {})
         timestamp = to_storage_time(observed_at or utc_now())

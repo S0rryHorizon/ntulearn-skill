@@ -30,6 +30,7 @@ from ntulearn_skill.client.contracts import (
     SourceUnavailable,
     TimeWindow,
     UnsupportedCapability,
+    safe_source_error_category,
 )
 from ntulearn_skill.client.ntulearn import NtulearnSourceAdapter
 from ntulearn_skill.client.transport import (
@@ -76,4 +77,5 @@ __all__ = [
     "TimeWindow",
     "UnsupportedCapability",
     "WireResponse",
+    "safe_source_error_category",
 ]

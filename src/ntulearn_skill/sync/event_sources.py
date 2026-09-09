@@ -26,6 +26,7 @@ from ntulearn_skill.client import (
     SourceProvider,
     SourceUnavailable,
     TimeWindow,
+    safe_source_error_category,
 )
 from ntulearn_skill.core import ContentId, CourseId, Coverage
 from ntulearn_skill.core.models import utc_now
@@ -334,7 +335,7 @@ class EventSourceSync:
         if not isinstance(error, SessionExpired):
             return
         try:
-            self.sessions.invalidate(error.category)
+            self.sessions.invalidate(SessionExpired.category)
         except Exception:
             pass
 
@@ -434,5 +435,5 @@ class EventSourceSync:
             Coverage.PARTIAL if progress.pages_seen or progress.items_seen else Coverage.FAILED
         )
         progress.pagination_complete = False
-        progress.failure_category = error.category
+        progress.failure_category = safe_source_error_category(error.category)
         progress.warn(SyncWarning.SOURCE_FAILURE)

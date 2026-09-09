@@ -32,6 +32,10 @@ The milestone order and acceptance criteria are defined in
 
 Test correctness, incremental behavior, provenance, failure recovery, privacy controls, and read-only safety using synthetic fixtures first and tightly controlled private data where necessary.
 
+**Status:** Synthetic/runtime safety passed; current live transport validation is externally
+blocked. The aggregate Phase 4 live gate remains open. Independent hardening work can
+proceed without treating this as full release acceptance.
+
 ## Phase 5 — Open-source Hardening
 
 Audit history and artifacts for sensitive data, finalize contributor and security guidance, validate packaging and documentation, and prepare a deliberate public release.

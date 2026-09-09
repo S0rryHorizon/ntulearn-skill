@@ -114,3 +114,11 @@ partial coverage. Floating dates use conservative bounds rather than an invented
 
 The Codex dispatcher is a Python integration surface, not an installed plugin or an
 LLM-backed agent. Semantic search and the ChatGPT integration remain deferred.
+
+## Phase 4 live gate recheck
+
+A fresh dedicated browser tab again reached the authenticated course UI. The same
+known read-only course API was blocked by the browser client. The tab was closed
+without changing account/course state. Current end-to-end live checks remain BLOCKED;
+this is not evidence that logging in again alone would resolve the transport limitation.
+Synthetic/runtime safety passed independently; no live capability is promoted by that result.

@@ -157,6 +157,30 @@ class UnsupportedCapability(SourceError):
         super().__init__(f"source capability is {state.value.lower()}: {capability.value}")
 
 
+_SOURCE_ERROR_CATEGORIES = frozenset(
+    {
+        SourceError.category,
+        AuthenticationRequired.category,
+        SessionExpired.category,
+        SourceAccessDenied.category,
+        ReadPolicyViolation.category,
+        SourceProtocolError.category,
+        SourceUnavailable.category,
+        PaginationLimitReached.category,
+        PaginationCycle.category,
+        UnsupportedCapability.category,
+    }
+)
+
+
+def safe_source_error_category(value: object) -> str:
+    """Return only a fixed public category from an untrusted source boundary."""
+
+    if isinstance(value, str) and value in _SOURCE_ERROR_CATEGORIES:
+        return value
+    return SourceUnavailable.category
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class AuthorizedReadSession:
     """Opaque marker owned by a session provider.
