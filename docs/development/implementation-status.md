@@ -19,9 +19,14 @@ human gate: no remote creation, push, or package publication is authorized.
 
 - Phase 3: PASS (M1–M9 synthetic implementation acceptance).
 - Phase 4: synthetic and runtime safety PASS (445 tests; independent safety review PASS); private live transport BLOCKED_BY_CLIENT. The aggregate live-validation gate is not PASS.
-- Phase 5: independent open-source hardening work pending; release gate remains blocked by private live validation.
+- Phase 5: independent offline open-source hardening PASS (463 tests on each of CPython 3.11–3.14; locked dependencies, packaging, documentation, CI configuration, and privacy review). The aggregate release gate remains blocked by private live validation; remote GitHub CI has not run.
 - Public release readiness: NOT READY.
 
 Acceptance requires executed tests, independent review, architecture regression
 review, and a staged privacy check. Private live evidence stays outside tracked
 files; only de-identified capability outcomes may be recorded here.
+
+## Validation and hardening commits
+
+- `25dba6f`: Phase 4 synthetic end-to-end validation and reviewed runtime-safety repairs.
+- Phase 5: the separate `chore: harden packaging and public release checks` commit contains the final hardening changes; see [hardening acceptance](phase5-hardening.md) and [packaging validation](packaging-validation.md).

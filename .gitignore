@@ -12,6 +12,7 @@ secrets.json
 
 # Private NTULearn data and local workspaces
 .local/
+.private/
 /downloads/
 /cache/
 /data/
@@ -33,6 +34,15 @@ secrets.json
 *.sqlite
 *.sqlite3
 *.db
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+*.db-wal
+*.db-shm
+*.db-journal
 !tests/fixtures/synthetic/**/*.sqlite
 !tests/fixtures/synthetic/**/*.sqlite3
 !tests/fixtures/synthetic/**/*.db

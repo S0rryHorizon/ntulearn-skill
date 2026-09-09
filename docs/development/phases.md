@@ -39,3 +39,8 @@ proceed without treating this as full release acceptance.
 ## Phase 5 — Open-source Hardening
 
 Audit history and artifacts for sensitive data, finalize contributor and security guidance, validate packaging and documentation, and prepare a deliberate public release.
+
+**Status:** Independent offline hardening passed. Locked dependencies, supported Python
+validation, distribution checks, contributor/security documentation, and privacy review
+are complete. The aggregate release gate remains blocked by current live validation;
+remote GitHub CI and publication have not run. See `phase5-hardening.md`.
