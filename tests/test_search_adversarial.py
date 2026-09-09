@@ -54,7 +54,7 @@ def _harness(tmp_path: Path) -> _Harness:
     domain = DomainRepository(database)
     resources = ResourceRepository(database)
     store = ResourceStore(paths, resources)
-    assert store.initialize() == 7
+    assert store.initialize() == 9
     return _Harness(paths, database, domain, resources, store, SearchService(database))
 
 

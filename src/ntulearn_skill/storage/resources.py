@@ -309,6 +309,8 @@ class ResourceRepository:
         content_id: ContentId,
         display_title: str,
         availability: Availability,
+        observation_status: ObservationStatus,
+        sync_run_key: int,
         timestamp: str,
     ) -> tuple[int, str, str, bool]:
         content_key, _course_key, _code, course_dir, provider = ResourceRepository._content_context(
@@ -327,6 +329,11 @@ class ResourceRepository:
             (source_key,),
         ).fetchone()
         if row is None:
+            initial_availability = (
+                Availability.UNKNOWN
+                if observation_status is ObservationStatus.UNKNOWN
+                else availability
+            )
             resource_dir = (
                 f"{_safe_component(display_title, fallback='resource', max_bytes=80)}"
                 f"--r_{source_key:08x}"
@@ -342,34 +349,96 @@ class ResourceRepository:
                     source_key,
                     content_key,
                     display_title,
-                    availability.value,
+                    initial_availability.value,
                     resource_dir,
                     timestamp,
                     timestamp,
                 ),
             )
             assert cursor.lastrowid is not None
-            return int(cursor.lastrowid), course_dir, resource_dir, True
+            return (
+                int(cursor.lastrowid),
+                course_dir,
+                resource_dir,
+                observation_status is ObservationStatus.OBSERVED,
+            )
         if int(row["content_key"]) != content_key:
             raise ValueError("a resource cannot move to another content node")
         resource_key = int(row["resource_key"])
-        is_latest = timestamp >= str(row["last_observed_at"])
+        latest_observed = connection.execute(
+            """
+            SELECT observed_at, sync_run_key
+            FROM resource_observation
+            WHERE resource_key = ? AND observation_status = 'OBSERVED'
+            ORDER BY observed_at DESC, sync_run_key DESC, observation_key DESC
+            LIMIT 1
+            """,
+            (resource_key,),
+        ).fetchone()
+        is_latest = bool(
+            observation_status is ObservationStatus.OBSERVED
+            and (
+                latest_observed is None
+                or (timestamp, sync_run_key)
+                >= (
+                    str(latest_observed["observed_at"]),
+                    int(latest_observed["sync_run_key"]),
+                )
+            )
+        )
         if is_latest:
+            if latest_observed is None:
+                connection.execute(
+                    """
+                    UPDATE resource
+                    SET display_title = ?, first_observed_at = ?, last_observed_at = ?
+                    WHERE resource_key = ?
+                    """,
+                    (display_title, timestamp, timestamp, resource_key),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE resource SET display_title = ?, last_observed_at = ?
+                    WHERE resource_key = ?
+                    """,
+                    (display_title, timestamp, resource_key),
+                )
+        if observation_status in {
+            ObservationStatus.OBSERVED,
+            ObservationStatus.NOT_OBSERVED,
+            ObservationStatus.UNAVAILABLE,
+        }:
+            latest_authoritative = connection.execute(
+                """
+                SELECT observed_at, sync_run_key
+                FROM resource_observation
+                WHERE resource_key = ?
+                  AND observation_status IN ('OBSERVED', 'NOT_OBSERVED', 'UNAVAILABLE')
+                ORDER BY observed_at DESC, sync_run_key DESC, observation_key DESC
+                LIMIT 1
+                """,
+                (resource_key,),
+            ).fetchone()
+            if latest_authoritative is None or (
+                timestamp,
+                sync_run_key,
+            ) >= (
+                str(latest_authoritative["observed_at"]),
+                int(latest_authoritative["sync_run_key"]),
+            ):
+                connection.execute(
+                    "UPDATE resource SET availability = ? WHERE resource_key = ?",
+                    (availability.value, resource_key),
+                )
+        if observation_status is ObservationStatus.OBSERVED and latest_observed is not None:
             connection.execute(
                 """
-                UPDATE resource
-                SET display_title = ?, availability = ?, last_observed_at = ?
+                UPDATE resource SET first_observed_at = MIN(first_observed_at, ?)
                 WHERE resource_key = ?
                 """,
-                (display_title, availability.value, timestamp, resource_key),
+                (timestamp, resource_key),
             )
-        connection.execute(
-            """
-            UPDATE resource SET first_observed_at = MIN(first_observed_at, ?)
-            WHERE resource_key = ?
-            """,
-            (timestamp, resource_key),
-        )
         return resource_key, course_dir, str(row["browse_dir_name"]), is_latest
 
     def observe(
@@ -509,6 +578,8 @@ class ResourceRepository:
                     content_id,
                     display_title,
                     availability,
+                    observation_status,
+                    sync_run_key,
                     timestamp,
                 )
                 if binary_supplied:

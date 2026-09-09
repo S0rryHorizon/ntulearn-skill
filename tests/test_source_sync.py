@@ -90,7 +90,7 @@ class FakeSource:
 
 def _repository(tmp_path: Path) -> DomainRepository:
     repository = DomainRepository(Database(tmp_path / "private" / "db" / "metadata.sqlite3"))
-    assert repository.initialize() == 7
+    assert repository.initialize() == 9
     return repository
 
 

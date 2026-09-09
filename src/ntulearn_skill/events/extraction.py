@@ -205,9 +205,13 @@ class DeterministicEventExtractor:
         except (sqlite3.Error, json.JSONDecodeError, TypeError):
             raise EventExtractionError("structured event extraction failed") from None
 
-    def extract_resource_version(self, version_key: int) -> ExtractionResult:
+    def extract_resource_version(
+        self, version_key: int, *, parse_key: int | None = None
+    ) -> ExtractionResult:
         if version_key <= 0:
             raise ValueError("version key must be positive")
+        if parse_key is not None and parse_key <= 0:
+            raise ValueError("parse key must be positive")
         try:
             with self.database.transaction() as connection:
                 version = connection.execute(
@@ -230,18 +234,31 @@ class DeterministicEventExtractor:
                 ).fetchone()
                 if version is None:
                     raise ValueError("verified resource version does not exist")
-                parsed = connection.execute(
-                    """
-                    SELECT * FROM parsed_document parsed
-                    WHERE parsed.version_key = ? AND parsed.status IN ('COMPLETE', 'PARTIAL')
-                    ORDER BY parsed.parsed_at DESC, parsed.parse_key DESC LIMIT 1
-                    """,
-                    (version_key,),
-                ).fetchone()
+                if parse_key is None:
+                    parsed = connection.execute(
+                        """
+                        SELECT * FROM parsed_document parsed
+                        WHERE parsed.version_key = ?
+                          AND parsed.status IN ('COMPLETE', 'PARTIAL')
+                        ORDER BY parsed.parsed_at DESC, parsed.parse_key DESC LIMIT 1
+                        """,
+                        (version_key,),
+                    ).fetchone()
+                else:
+                    parsed = connection.execute(
+                        """
+                        SELECT * FROM parsed_document parsed
+                        WHERE parsed.parse_key = ? AND parsed.version_key = ?
+                          AND parsed.status IN ('COMPLETE', 'PARTIAL')
+                        """,
+                        (parse_key, version_key),
+                    ).fetchone()
                 if parsed is None:
                     raise ValueError("resource version has no reusable parse")
-                parse_key = int(parsed["parse_key"])
-                cached = self._cached(connection, "resource_version", None, version_key, parse_key)
+                selected_parse_key = int(parsed["parse_key"])
+                cached = self._cached(
+                    connection, "resource_version", None, version_key, selected_parse_key
+                )
                 if cached is not None:
                     return self._result(connection, cached, cache_hit=True)
                 chunks = connection.execute(
@@ -252,7 +269,7 @@ class DeterministicEventExtractor:
                     JOIN parsed_document parsed ON parsed.parse_key = chunk.parse_key
                     WHERE chunk.parse_key = ? ORDER BY chunk.ordinal
                     """,
-                    (parse_key,),
+                    (selected_parse_key,),
                 ).fetchall()
                 drafts: list[_CandidateDraft] = []
                 warnings: list[str] = []
@@ -276,7 +293,7 @@ class DeterministicEventExtractor:
                     input_kind="resource_version",
                     source_observation_key=None,
                     version_key=version_key,
-                    parse_key=parse_key,
+                    parse_key=selected_parse_key,
                     input_hash=self._parse_input_hash(str(version["sha256"]), parsed),
                     status="PARTIAL" if warnings else "COMPLETE",
                     warnings=tuple(dict.fromkeys(warnings)),

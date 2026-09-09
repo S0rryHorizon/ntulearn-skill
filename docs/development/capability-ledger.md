@@ -53,7 +53,7 @@ a response shape is validated. Due-calendar start/end fields are retained withou
 they establish due semantics. Structured assessment due fields retain separate provenance.
 Prose extraction covers bounded English patterns with explicit dates, course weeks, and
 selected timezone forms; completed processing does not establish exhaustive event recall.
-Canonical reconciliation is implemented in M7; automated event sync modes follow in M8.
+Canonical reconciliation is implemented in M7; automated event sync modes are implemented in M8.
 
 A bounded replay after M6 acceptance passed the implemented announcement, assessment,
 and due-item translators against historical responses. Assessment due fields retained
@@ -72,3 +72,28 @@ already-bound source to another event is conservatively rejected. Local user Cla
 remain explicitly local and are excluded from source-backed FTS documents; event
 FTS documents index the supported title, while field wording is retrieved through
 Claim hits. Source-backed historical references remain stable after projection updates.
+
+## Incremental synchronization limits
+
+M8 composes quick, course, selected-course all, resource fetch, and exact-scope refresh
+through injected read-only source/session providers. It distinguishes metadata-based
+assumption from verified hash equality and a change back to a historical binary.
+Verification receipts are tied to the authoritative version. Unsupported capabilities
+remain explicit and are not accessed. No remote delta or validator optimization is used.
+
+Freshness separates latest attempt from prior success/completeness, including equal-time
+run ordering and exact windows. Historical/cache-only retrieval never refreshes; allowed
+refresh retries local retrieval once. REFRESH_IF_STALE without a configured maximum age
+reports unsatisfied/unknown instead of guessing a policy.
+
+Resource omissions are inferred only from complete comparable inventories, never from
+partial traversal or inaccessible parents. Evidence ordering protects against delayed
+reads and delayed inventories. Content/course availability is not inferred from omission:
+those entities do not yet have an immutable lifecycle observation table. Local bytes and
+all provenance remain retained. Repeated omissions never establish remote deletion.
+
+Local jobs carry durable configuration contracts and exact parse dependencies. A changed
+service contract fails safely; a current plan creates the appropriate new input identity.
+Bounded/uncompleted processing and postcommit receipt, job, or browse repair gaps produce
+partial scope results. Repeated identical source snapshots reuse their first exact
+observation provenance while current freshness is recorded separately.

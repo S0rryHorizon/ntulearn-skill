@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from ntulearn_skill.client import (
     AuthorizedReadSession,
+    CapabilityState,
     ContentSourceRecord,
     CourseSourceRecord,
     Page,
@@ -16,6 +17,7 @@ from ntulearn_skill.client import (
     ResourceMetadataRecord,
     SessionExpired,
     SessionProvider,
+    SourceCapability,
     SourceError,
     SourceProtocolError,
     SourceProvider,
@@ -33,6 +35,16 @@ from ntulearn_skill.core.models import to_storage_time, utc_now
 from ntulearn_skill.storage import DomainRepository, ResourceRepository
 from ntulearn_skill.sync.models import ScopeResult, SyncRunResult, SyncWarning
 from ntulearn_skill.sync.observability import SyncRunRecorder
+
+
+@dataclass(frozen=True, slots=True)
+class ScopedDiscoveryResult:
+    """Observed records and exact coverage for one caller-owned sync run."""
+
+    course: CourseSourceRecord | None
+    content: tuple[ContentSourceRecord, ...]
+    resources: tuple[ResourceMetadataRecord, ...]
+    scopes: tuple[ScopeResult, ...]
 
 
 @dataclass(slots=True)
@@ -95,41 +107,53 @@ class DiscoverySync:
             "scopes_failed": 0,
         }
         scopes: list[ScopeResult] = []
+        courses: list[CourseSourceRecord]
 
-        try:
-            discovery_session = self._acquire(ReadPurpose.DISCOVERY)
-            courses, course_scope = self._courses(discovery_session, page_size, max_pages_per_scope)
-        except SourceError as error:
-            self._invalidate_if_expired(error)
-            course_scope = self._failed_scope("courses", None, error.category)
+        if not self._supported(SourceCapability.COURSE_DISCOVERY):
+            course_scope = self._unsupported_scope("courses", None)
             courses = []
+        else:
+            try:
+                discovery_session = self._acquire(ReadPurpose.DISCOVERY)
+                courses, course_scope = self._courses(
+                    discovery_session, page_size, max_pages_per_scope
+                )
+            except SourceError as error:
+                self._invalidate_if_expired(error)
+                course_scope = self._failed_scope("courses", None, error.category)
         scopes.append(course_scope)
         self.recorder.record_scope(run_key, course_scope)
         counts["courses_observed"] = course_scope.items_seen
 
         if include_content and courses:
-            try:
-                content_session = self._acquire(ReadPurpose.CONTENT)
-            except SourceError as error:
-                self._invalidate_if_expired(error)
+            if not self._supported(SourceCapability.CONTENT_TREE):
                 for course in courses:
-                    scope = self._failed_scope("content", course.remote_id, error.category)
+                    scope = self._unsupported_scope("content", course.remote_id)
                     scopes.append(scope)
                     self.recorder.record_scope(run_key, scope)
             else:
-                for course in courses:
-                    scope, resources_seen = self._content(
-                        run_key,
-                        content_session,
-                        course.remote_id,
-                        page_size,
-                        max_pages_per_scope,
-                        max_content_nodes,
-                    )
-                    scopes.append(scope)
-                    self.recorder.record_scope(run_key, scope)
-                    counts["content_observed"] += scope.items_seen
-                    counts["resources_discovered"] += resources_seen
+                try:
+                    content_session = self._acquire(ReadPurpose.CONTENT)
+                except SourceError as error:
+                    self._invalidate_if_expired(error)
+                    for course in courses:
+                        scope = self._failed_scope("content", course.remote_id, error.category)
+                        scopes.append(scope)
+                        self.recorder.record_scope(run_key, scope)
+                else:
+                    for course in courses:
+                        scope, resources_seen = self._content(
+                            run_key,
+                            content_session,
+                            course.remote_id,
+                            page_size,
+                            max_pages_per_scope,
+                            max_content_nodes,
+                        )
+                        scopes.append(scope)
+                        self.recorder.record_scope(run_key, scope)
+                        counts["content_observed"] += scope.items_seen
+                        counts["resources_discovered"] += resources_seen
 
         for scope in scopes:
             if scope.coverage is Coverage.COMPLETE:
@@ -155,6 +179,157 @@ class DiscoverySync:
             warnings=warnings,
             error_category=error_category,
         )
+
+    def sync_course(
+        self,
+        run_key: int,
+        course: CourseId,
+        *,
+        include_availability: bool = True,
+        include_content: bool = True,
+        page_size: int = 100,
+        max_pages_per_scope: int = 100,
+        max_content_nodes: int = 10_000,
+    ) -> ScopedDiscoveryResult:
+        """Observe only one requested course inside a run owned by a higher-level engine."""
+
+        if isinstance(run_key, bool) or not isinstance(run_key, int) or run_key <= 0:
+            raise ValueError("run_key must be a positive integer")
+        if type(course) is not CourseId or course.provider != self.source.provider_name:
+            raise ValueError("course must belong to the source provider")
+        if max_pages_per_scope <= 0 or max_content_nodes <= 0:
+            raise ValueError("sync bounds must be positive")
+        PageRequest(page_size=page_size)
+
+        scopes: list[ScopeResult] = []
+        observed_course: CourseSourceRecord | None = None
+        if include_availability:
+            if not self._supported(SourceCapability.COURSE_DISCOVERY):
+                persisted = course if self.repository.get_course(course) is not None else None
+                course_scope = self._unsupported_scope("course_availability", persisted)
+            else:
+                observed_course, course_scope = self._target_course(
+                    course, page_size, max_pages_per_scope
+                )
+            scopes.append(course_scope)
+            if observed_course is None:
+                return ScopedDiscoveryResult(None, (), (), tuple(scopes))
+        elif self.repository.get_course(course) is None:
+            raise ValueError("course must already exist when availability refresh is skipped")
+
+        content: list[ContentSourceRecord] = []
+        resources: list[ResourceMetadataRecord] = []
+        if include_content:
+            if not self._supported(SourceCapability.CONTENT_TREE):
+                content_scope = self._unsupported_scope("content", course)
+            else:
+                try:
+                    session = self._acquire(ReadPurpose.CONTENT)
+                except SourceError as error:
+                    self._invalidate_if_expired(error)
+                    content_scope = self._failed_scope("content", course, error.category)
+                else:
+                    content_scope, _ = self._content(
+                        run_key,
+                        session,
+                        course,
+                        page_size,
+                        max_pages_per_scope,
+                        max_content_nodes,
+                        observed_content=content,
+                        observed_resources=resources,
+                    )
+            scopes.append(content_scope)
+        return ScopedDiscoveryResult(
+            observed_course, tuple(content), tuple(resources), tuple(scopes)
+        )
+
+    def discover_courses(
+        self,
+        run_key: int,
+        *,
+        page_size: int = 100,
+        max_pages_per_scope: int = 100,
+    ) -> tuple[tuple[CourseSourceRecord, ...], ScopeResult]:
+        """Observe the accessible course inventory inside a caller-owned run."""
+
+        if isinstance(run_key, bool) or not isinstance(run_key, int) or run_key <= 0:
+            raise ValueError("run_key must be a positive integer")
+        if max_pages_per_scope <= 0:
+            raise ValueError("sync bounds must be positive")
+        PageRequest(page_size=page_size)
+        if not self._supported(SourceCapability.COURSE_DISCOVERY):
+            courses: list[CourseSourceRecord] = []
+            scope = self._unsupported_scope("courses", None)
+        else:
+            try:
+                session = self._acquire(ReadPurpose.DISCOVERY)
+            except SourceError as error:
+                self._invalidate_if_expired(error)
+                courses = []
+                scope = self._failed_scope("courses", None, error.category)
+            else:
+                courses, scope = self._courses(session, page_size, max_pages_per_scope)
+        return tuple(courses), scope
+
+    def _target_course(
+        self, course: CourseId, page_size: int, max_pages: int
+    ) -> tuple[CourseSourceRecord | None, ScopeResult]:
+        progress = _Progress()
+        cursor: str | None = None
+        seen_cursors: set[str | None] = set()
+        result: CourseSourceRecord | None = None
+        try:
+            session = self._acquire(ReadPurpose.DISCOVERY)
+            while True:
+                if progress.pages_seen >= max_pages:
+                    self._partial(
+                        progress, "pagination_limit_reached", SyncWarning.PAGE_CAP_REACHED
+                    )
+                    break
+                if cursor in seen_cursors:
+                    self._partial(progress, "pagination_cycle", SyncWarning.PAGINATION_CYCLE)
+                    break
+                seen_cursors.add(cursor)
+                page = self.source.list_courses(
+                    session, PageRequest(cursor=cursor, page_size=page_size)
+                )
+                self._validate_page(page)
+                progress.pages_seen += 1
+                self._merge_page_coverage(progress, page.coverage_for_page)
+                for item in page.items:
+                    self._validate_course(item)
+                    if item.remote_id != course:
+                        continue
+                    self.repository.put_course(
+                        item.remote_id,
+                        code=item.code,
+                        title=item.title,
+                        term=item.term,
+                        availability=item.availability,
+                    )
+                    progress.items_seen = 1
+                    progress.pagination_complete = True
+                    result = item
+                    break
+                if result is not None:
+                    break
+                cursor = page.next_cursor
+                if cursor is None:
+                    progress.pagination_complete = True
+                    break
+        except SourceError as error:
+            self._source_failure(progress, error)
+            self._invalidate_if_expired(error)
+        except Exception:
+            self._source_failure(progress, SourceUnavailable())
+        if result is None and progress.coverage is Coverage.COMPLETE:
+            progress.coverage = Coverage.FAILED
+            progress.pagination_complete = False
+            progress.failure_category = "course_not_observed"
+            progress.warn(SyncWarning.SOURCE_FAILURE)
+        persisted = course if self.repository.get_course(course) is not None else None
+        return result, self._scope("course_availability", persisted, progress)
 
     def _courses(
         self, session: AuthorizedReadSession, page_size: int, max_pages: int
@@ -215,6 +390,9 @@ class DiscoverySync:
         page_size: int,
         max_pages: int,
         max_nodes: int,
+        *,
+        observed_content: list[ContentSourceRecord] | None = None,
+        observed_resources: list[ResourceMetadataRecord] | None = None,
     ) -> tuple[ScopeResult, int]:
         progress = _Progress()
         parents: deque[ContentId | None] = deque([None])
@@ -280,6 +458,8 @@ class DiscoverySync:
                             availability=item.availability,
                             sanitized_metadata=item.sanitized_metadata,
                         )
+                        if observed_content is not None:
+                            observed_content.append(item)
                         progress.items_seen += 1
                         for resource in item.resources:
                             self.resources.observe(
@@ -297,6 +477,8 @@ class DiscoverySync:
                                 if resource.candidate_modified_at is None
                                 else to_storage_time(resource.candidate_modified_at),
                             )
+                            if observed_resources is not None:
+                                observed_resources.append(resource)
                             progress.resources_seen += 1
                         if item.is_container and item.remote_id not in queued:
                             parents.append(item.remote_id)
@@ -429,6 +611,26 @@ class DiscoverySync:
             warnings=(SyncWarning.SOURCE_FAILURE,),
             observed_at=utc_now(),
         )
+
+    def _unsupported_scope(self, data_kind: str, course: CourseId | None) -> ScopeResult:
+        return ScopeResult(
+            provider=self.source.provider_name,
+            course_id=course,
+            data_kind=data_kind,
+            coverage=Coverage.UNKNOWN,
+            pages_seen=0,
+            items_seen=0,
+            pagination_complete=False,
+            failure_category="unsupported_capability",
+            warnings=(SyncWarning.PAGE_COVERAGE_UNKNOWN,),
+            observed_at=utc_now(),
+        )
+
+    def _supported(self, capability: SourceCapability) -> bool:
+        try:
+            return self.source.capabilities().state(capability) is CapabilityState.SUPPORTED
+        except Exception:
+            return False
 
     def _acquire(self, purpose: ReadPurpose) -> AuthorizedReadSession:
         try:

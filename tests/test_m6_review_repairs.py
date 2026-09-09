@@ -42,7 +42,7 @@ def _setup(
 ]:
     database = Database(database_path)
     domain = DomainRepository(database)
-    assert domain.initialize() == 7
+    assert domain.initialize() == 9
     course_a = CourseId("synthetic", "course-a")
     course_b = CourseId("synthetic", "course-b")
     content_a = ContentId("synthetic", "content-a")

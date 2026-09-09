@@ -102,7 +102,7 @@ def harness(tmp_path: Path) -> ResourceHarness:
     database = Database(paths.database)
     repository = ResourceRepository(database)
     store = ResourceStore(paths, repository)
-    assert store.initialize() == 7
+    assert store.initialize() == 9
 
     domain = DomainRepository(database)
     course_id = CourseId("synthetic", "adversarial-course")

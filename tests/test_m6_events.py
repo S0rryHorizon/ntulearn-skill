@@ -110,7 +110,7 @@ def test_adapter_observations_extract_candidates_and_refresh_fts_transactionally
 
     database = Database(tmp_path / "private" / "metadata.sqlite3")
     domain = DomainRepository(database)
-    assert domain.initialize() == 7
+    assert domain.initialize() == 9
     adapter = NtulearnSourceAdapter(
         ReadOnlyTransport(executor), source_origin="https://learn.example.invalid"
     )
