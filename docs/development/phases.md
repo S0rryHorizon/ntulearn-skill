@@ -23,7 +23,7 @@ implemented in this phase.
 
 Implement the smallest validated vertical slices, preserving a standalone core and CLI with optional thin AI adapters.
 
-**Status:** In progress. M1–M6 accepted; M7–M9 pending. See `implementation-status.md`.
+**Status:** In progress. M1–M7 accepted; M8–M9 pending. See `implementation-status.md`.
 The milestone order and acceptance criteria are defined in
 `docs/architecture/testing-and-implementation.md`.
 

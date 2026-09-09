@@ -177,6 +177,8 @@ class SearchIndex:
             cls._insert_content(connection, course_key=course_key)
             cls._insert_announcements(connection, course_key=course_key)
             cls._insert_assessments(connection, course_key=course_key)
+            cls._insert_events(connection, course_key=course_key)
+            cls._insert_claims(connection, course_key=course_key)
             cls._insert_materials(connection, course_key=course_key)
             cls._insert_native_chunks(connection, course_key=course_key)
             cls._insert_derived_chunks(connection, course_key=course_key)
@@ -218,6 +220,8 @@ class SearchIndex:
         SearchIndex._insert_content(connection)
         SearchIndex._insert_announcements(connection)
         SearchIndex._insert_assessments(connection)
+        SearchIndex._insert_events(connection)
+        SearchIndex._insert_claims(connection)
         SearchIndex._insert_materials(connection)
         SearchIndex._insert_native_chunks(connection)
         SearchIndex._insert_derived_chunks(connection)
@@ -337,6 +341,83 @@ class SearchIndex:
             JOIN content_node content ON content.content_key = assessment.content_key
             WHERE (? IS NULL OR course.course_key = ?)
             ORDER BY assessment.assessment_key
+            """,
+            (course_key, course_key),
+        )
+
+    @staticmethod
+    def _insert_events(connection: sqlite3.Connection, *, course_key: int | None = None) -> None:
+        """Index only the canonical title with the exact source that supports it."""
+
+        connection.execute(
+            """
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, resource_key, version_key,
+                source_ref_kind, source_ref_key, course_code, course_title, content_title,
+                title, filename, semantic_type, file_format, availability, text_origin, body
+            )
+            SELECT
+                'event', event.event_key, course.course_key,
+                version.resource_key, locator.version_key,
+                CASE
+                    WHEN field.source_observation_key IS NOT NULL THEN 'source_observation'
+                    ELSE 'source_locator'
+                END,
+                COALESCE(field.source_observation_key, field.locator_key),
+                course.code, course.title, '',
+                CAST(json_extract(field.value_json, '$') AS TEXT), '', '',
+                COALESCE(version.file_format, ''), 'UNKNOWN', 'metadata', ''
+            FROM event
+            JOIN course ON course.course_key = event.course_key
+            JOIN event_field_projection projection
+              ON projection.event_key = event.event_key AND projection.field_name = 'title'
+            JOIN claim title_claim ON title_claim.claim_key = projection.selected_claim_key
+            JOIN event_candidate_field field
+              ON field.candidate_field_key = title_claim.candidate_field_key
+            LEFT JOIN source_locator locator ON locator.locator_key = field.locator_key
+            LEFT JOIN resource_version version ON version.version_key = locator.version_key
+            WHERE title_claim.origin = 'SOURCE'
+              AND title_claim.decision_state = 'ACCEPTED'
+              AND json_type(field.value_json) = 'text'
+              AND (? IS NULL OR course.course_key = ?)
+            ORDER BY event.event_key
+            """,
+            (course_key, course_key),
+        )
+
+    @staticmethod
+    def _insert_claims(connection: sqlite3.Connection, *, course_key: int | None = None) -> None:
+        """Index each source claim against its own immutable evidence reference."""
+
+        connection.execute(
+            """
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, resource_key, version_key,
+                source_ref_kind, source_ref_key, course_code, course_title, content_title,
+                title, filename, semantic_type, file_format, availability, text_origin, body
+            )
+            SELECT
+                'claim', claim.claim_key, source.course_key,
+                version.resource_key, locator.version_key,
+                CASE
+                    WHEN field.source_observation_key IS NOT NULL THEN 'source_observation'
+                    ELSE 'source_locator'
+                END,
+                COALESCE(field.source_observation_key, field.locator_key),
+                course.code, course.title, '', field.original_text, '', '',
+                COALESCE(version.file_format, ''), 'UNKNOWN', 'metadata',
+                field.field_name || ' ' || claim.decision_state || ' '
+                    || field.original_text || ' ' || field.value_json
+            FROM claim
+            JOIN event_source source ON source.event_source_key = claim.event_source_key
+            JOIN course ON course.course_key = source.course_key
+            JOIN event_candidate_field field
+              ON field.candidate_field_key = claim.candidate_field_key
+            LEFT JOIN source_locator locator ON locator.locator_key = field.locator_key
+            LEFT JOIN resource_version version ON version.version_key = locator.version_key
+            WHERE claim.origin = 'SOURCE'
+              AND (? IS NULL OR course.course_key = ?)
+            ORDER BY claim.claim_key
             """,
             (course_key, course_key),
         )

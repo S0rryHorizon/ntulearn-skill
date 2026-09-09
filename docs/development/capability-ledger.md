@@ -53,4 +53,22 @@ a response shape is validated. Due-calendar start/end fields are retained withou
 they establish due semantics. Structured assessment due fields retain separate provenance.
 Prose extraction covers bounded English patterns with explicit dates, course weeks, and
 selected timezone forms; completed processing does not establish exhaustive event recall.
-Canonical reconciliation and automated event sync modes follow in M7 and M8.
+Canonical reconciliation is implemented in M7; automated event sync modes follow in M8.
+
+A bounded replay after M6 acceptance passed the implemented announcement, assessment,
+and due-item translators against historical responses. Assessment due fields retained
+their distinct sources; due-item composite identities remained distinct and coverage
+remained UNKNOWN. No current network transport or live synchronization was validated.
+
+## Reconciliation limits
+
+M7 preserves candidate evidence in source-backed Claims, projects accepted fields,
+and returns unresolved identity matches and field conflicts. Source chronology is
+distinct from observation order; unknown chronology cannot establish supersession.
+Change extraction recognizes bounded affirmative English constructions and abstains
+on unsupported wording. This does not establish exhaustive natural-language recall.
+Manual field decisions are revisable and retained across automatic reruns. Moving an
+already-bound source to another event is conservatively rejected. Local user Claims
+remain explicitly local and are excluded from source-backed FTS documents; event
+FTS documents index the supported title, while field wording is retrieved through
+Claim hits. Source-backed historical references remain stable after projection updates.

@@ -10,8 +10,8 @@ human gate: no remote creation, push, or package publication is authorized.
 | M3 Read-only source | PASS | `8f8d79b` | 123 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | Injected session/transport and fresh resource route; end-to-end live adapter NOT VALIDATED |
 | M4 Parsing | PASS | `4f17594` | 82 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | PDF/DOCX only; visual fallback requires an optional provider; no decoder process isolation |
 | M5 FTS retrieval | PASS | `562face` | 144 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | Lexical FTS; durable source locators survive rebuild; full freshness policy follows in M8 |
-| M6 Event candidates | PASS | this commit | 180 tests; lint/format; strict types; compile; wheel/sdist; independent + source critical review PASS | Bounded English extraction; schedule adapter UNKNOWN; due-calendar source times not assumed to be due times |
-| M7 Reconciliation | PENDING | — | Depends on M6 | — |
+| M6 Event candidates | PASS | `c2fa638` | 180 tests; lint/format; strict types; compile; wheel/sdist; independent + source critical review PASS | Bounded English extraction; schedule adapter UNKNOWN; due-calendar source times not assumed to be due times |
+| M7 Reconciliation | PASS | this commit | 277 tests; lint/format; strict types; compile; wheel/sdist; independent + critical review PASS | Bounded affirmative English changes; manual reassignment of an already-bound source is rejected; local decisions are not indexed as source evidence |
 | M8 Incremental sync | PENDING | — | Depends on M2–M7 | — |
 | M9 Core / CLI / integration | PENDING | — | Depends on M1–M8 | — |
 

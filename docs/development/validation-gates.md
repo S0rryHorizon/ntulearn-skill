@@ -46,3 +46,12 @@ Failed parser attempts remain immutable audit records and are not reusable cache
 The version/parser/engine/settings key identifies at most one reusable terminal result;
 a transient failure can be retried without inventing new settings. Ordinary Python
 diagnostics are discarded within serialized parser/fallback calls; this is not process isolation.
+
+## Early history privacy regression
+
+At M6 commit `c2fa638`, an independent read-only preflight examined all 8 reachable
+commits (165 unique historical blobs), 98 tracked working-tree files, and 35 ignore
+probes. No prohibited private source data or unexpected binary artifacts were
+detected. Synthetic secret canaries were reviewed as such. This is not final
+release acceptance: final history, wheel/sdist contents, dependencies and later
+milestone changes still require inspection. Git author attribution is retained.

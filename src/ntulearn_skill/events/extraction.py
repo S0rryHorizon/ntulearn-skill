@@ -15,6 +15,7 @@ from ntulearn_skill.events.models import (
     CandidateField,
     CandidateFieldName,
     CandidateSourceKind,
+    ChangeKind,
     EventCandidate,
     EventType,
     ExtractionResult,
@@ -37,7 +38,7 @@ _MONTH = (
 _TEMPORAL_PATTERN = re.compile(
     rf"\b(?:"
     rf"\d{{4}}-\d{{2}}-\d{{2}}[T ]\d{{1,2}}:\d{{2}}(?::\d{{2}})?"
-    rf"(?:Z|\s?(?:[+-]\d{{2}}:\d{{2}}|SGT))"
+    rf"(?:Z|\s?(?:[+-]\d{{2}}:\d{{2}}|SGT|UTC))"
     rf"|(?:\d{{1,2}}\s+{_MONTH}|{_MONTH}\s+\d{{1,2}}),?\s+\d{{4}}"
     rf"\s+(?:at\s+)?\d{{1,2}}:\d{{2}}(?:\s?(?:[+-]\d{{2}}:\d{{2}}|SGT|UTC))"
     rf"|\d{{4}}-\d{{2}}-\d{{2}}"
@@ -67,6 +68,58 @@ _EXPLICIT_START_PATTERN = re.compile(r"\b(?:starts?|begins?|takes?\s+place)\b", 
 _NON_START_TEMPORAL_PATTERN = re.compile(
     r"\b(?:announced|published|opens?|available(?:\s+from)?)\b", re.I
 )
+_CHANGE_TERM = r"(?:moved|postponed|rescheduled|cancelled|canceled|changed|corrected|updated)"
+_CHANGE_TERM_PATTERN = re.compile(rf"\b{_CHANGE_TERM}\b", re.I)
+_CONDITIONAL_CHANGE_PATTERN = re.compile(r"\b(?:if|unless|whether)\b|\bin\s+case\b", re.I)
+_ORDINAL = r"(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)"
+_EVENT_TARGET = (
+    rf"(?:the\s+)?(?:{_ORDINAL}\s+)?"
+    r"(?:assignment|homework|quiz|term\s+test|midterm|test|exam(?:ination)?|"
+    r"presentation|tutorial|lab(?:oratory)?|lecture|submission)"
+    r"(?:\s+#?\d+)?"
+)
+_PASSIVE_CHANGE_AUXILIARY = r"(?:(?:is|are|was|were)\s+|(?:has|have|had)\s+been\s+|will\s+be\s+)?"
+_MOVE_CHANGE_AUXILIARY = r"(?:(?:is|are|was|were)\s+|(?:has|have|had)\s+(?:been\s+)?|will\s+be\s+)?"
+_AFFIRMATIVE_CANCELLATION_PATTERN = re.compile(
+    rf"^\s*{_EVENT_TARGET}\s+{_PASSIVE_CHANGE_AUXILIARY}(?:cancelled|canceled)\b",
+    re.I,
+)
+_AFFIRMATIVE_MOVE_PATTERN = re.compile(
+    rf"^\s*{_EVENT_TARGET}"
+    r"(?:\s+(?:deadline|due\s+date|date|time|schedule|session))?\s+"
+    rf"{_MOVE_CHANGE_AUXILIARY}(?:moved|postponed|rescheduled)\b",
+    re.I,
+)
+_CANCELLATION_TOKEN_PATTERN = re.compile(r"\b(?:cancelled|canceled)\b", re.I)
+_VENUE_CHANGE_PATTERN = re.compile(
+    rf"^\s*{_EVENT_TARGET}\s+(?:venue|location|room)\s+{_MOVE_CHANGE_AUXILIARY}"
+    r"(?:changed|moved|updated)\s+(?:to\s+)?(?P<location>[^.;\n]{1,200})",
+    re.I,
+)
+_AFFIRMATIVE_TEMPORAL_REVISION_PATTERN = re.compile(
+    rf"^\s*{_EVENT_TARGET}\s+(?:deadline|due\s+date|date|time|schedule|session)\s+"
+    rf"{_MOVE_CHANGE_AUXILIARY}(?:changed|corrected|updated)\b",
+    re.I,
+)
+
+
+def classify_change_language(text: str) -> ChangeKind:
+    """Classify only bounded affirmative English change statements."""
+
+    if _CHANGE_TERM_PATTERN.search(text) is None:
+        return ChangeKind.NONE
+    if text.rstrip().endswith("?") or _CONDITIONAL_CHANGE_PATTERN.search(text) is not None:
+        return ChangeKind.NONE
+    if _AFFIRMATIVE_CANCELLATION_PATTERN.search(text) is not None:
+        return ChangeKind.CANCELLATION
+    if _VENUE_CHANGE_PATTERN.search(text) is not None:
+        return ChangeKind.VENUE_CHANGE
+    if (
+        _AFFIRMATIVE_MOVE_PATTERN.search(text) is not None
+        or _AFFIRMATIVE_TEMPORAL_REVISION_PATTERN.search(text) is not None
+    ):
+        return ChangeKind.MOVE
+    return ChangeKind.NONE
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +145,7 @@ class DeterministicEventExtractor:
     """Extract reproducible candidates from structured observations or immutable chunks."""
 
     name = "deterministic-event-rules"
-    version = "1"
+    version = "3"
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -369,13 +422,61 @@ class DeterministicEventExtractor:
                 continue
             event_type, keyword = self._event_type(mention)
             temporals = list(_TEMPORAL_PATTERN.finditer(mention))
-            if event_type is None or not temporals:
+            change_kind = classify_change_language(mention)
+            if change_kind is ChangeKind.NONE and _CHANGE_TERM_PATTERN.search(mention) is not None:
+                # A negated, conditional, or modal mention is evidence about uncertainty,
+                # not an affirmative source claim. Preserve it in the immutable observation
+                # while abstaining from candidate generation.
                 continue
-            title = self._candidate_title(mention, temporals[0].start())
+            cancellation = (
+                _CANCELLATION_TOKEN_PATTERN.search(mention)
+                if change_kind is ChangeKind.CANCELLATION
+                else None
+            )
+            venue_change = (
+                _VENUE_CHANGE_PATTERN.search(mention)
+                if change_kind is ChangeKind.VENUE_CHANGE
+                else None
+            )
+            if event_type is None and cancellation is None and venue_change is None:
+                continue
+            if not temporals and cancellation is None and venue_change is None:
+                continue
+            if event_type is None:
+                event_type = (
+                    EventType.CANCELLATION if cancellation is not None else EventType.VENUE_CHANGE
+                )
+                keyword = "cancellation" if cancellation is not None else "venue change"
+            boundary = temporals[0].start() if temporals else len(mention)
+            title = self._candidate_title(mention, boundary)
             fields: list[_FieldDraft] = [
                 _FieldDraft(CandidateFieldName.TITLE, title, title),
                 _FieldDraft(CandidateFieldName.EVENT_TYPE, event_type.value, keyword),
             ]
+            if cancellation is not None:
+                fields.append(
+                    _FieldDraft(
+                        CandidateFieldName.STATUS,
+                        "CANCELLED",
+                        cancellation.group(0),
+                        source_path="text.status",
+                    )
+                )
+            if venue_change is not None:
+                location = venue_change.group("location").strip(" :-–—\t")
+                fields.append(
+                    _FieldDraft(
+                        CandidateFieldName.LOCATION,
+                        location,
+                        location,
+                        source_path="text.location",
+                    )
+                )
+            if not temporals:
+                drafts.append(
+                    _CandidateDraft(source_kind, mention[:4096], 0.8, evidence_key, tuple(fields))
+                )
+                continue
             due_marker = re.search(r"\b(?:due|deadline|submit(?:ted|sion)?)\b", mention, re.I)
             is_due = due_marker is not None
             if due_marker is not None:
@@ -432,6 +533,20 @@ class DeterministicEventExtractor:
             flags=re.I,
         )
         prefix = prefix.strip(" :-–—\t")
+        prefix = re.sub(
+            r"\s+(?:has\s+been\s+|is\s+|was\s+)?"
+            r"(?:moved|postponed|rescheduled|cancelled|canceled)\s*(?:to)?\s*$",
+            "",
+            prefix,
+            flags=re.I,
+        )
+        prefix = re.sub(
+            r"\s+(?:venue|location|room)\s+(?:has\s+been\s+|is\s+)?"
+            r"(?:changed|moved|updated)\s+(?:to\s+)?.*$",
+            "",
+            prefix,
+            flags=re.I,
+        )
         return (prefix or text).strip()[:500]
 
     @staticmethod

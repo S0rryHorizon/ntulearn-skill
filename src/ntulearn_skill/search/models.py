@@ -18,6 +18,8 @@ class SearchEntityKind(StrEnum):
     CHUNK = "chunk"
     ANNOUNCEMENT = "announcement"
     ASSESSMENT = "assessment"
+    EVENT = "event"
+    CLAIM = "claim"
 
 
 class SearchTextOrigin(StrEnum):
