@@ -1,11 +1,14 @@
 """Authenticated, operation-guarded source-client boundary."""
 
 from ntulearn_skill.client.contracts import (
+    AnnouncementSourceRecord,
+    AssessmentSourceRecord,
     AuthenticationRequired,
     AuthorizedReadSession,
     CapabilityState,
     ContentSourceRecord,
     CourseSourceRecord,
+    DueSourceRecord,
     EphemeralByteStream,
     Page,
     PageRequest,
@@ -14,6 +17,7 @@ from ntulearn_skill.client.contracts import (
     ReadPolicyViolation,
     ReadPurpose,
     ResourceMetadataRecord,
+    ScheduleSourceRecord,
     SessionExpired,
     SessionProvider,
     SessionStatus,
@@ -24,6 +28,7 @@ from ntulearn_skill.client.contracts import (
     SourceProtocolError,
     SourceProvider,
     SourceUnavailable,
+    TimeWindow,
     UnsupportedCapability,
 )
 from ntulearn_skill.client.ntulearn import NtulearnSourceAdapter
@@ -36,11 +41,14 @@ from ntulearn_skill.client.transport import (
 )
 
 __all__ = [
+    "AnnouncementSourceRecord",
     "AuthenticationRequired",
+    "AssessmentSourceRecord",
     "AuthorizedReadSession",
     "CapabilityState",
     "ContentSourceRecord",
     "CourseSourceRecord",
+    "DueSourceRecord",
     "EphemeralByteStream",
     "NtulearnSourceAdapter",
     "Page",
@@ -53,6 +61,7 @@ __all__ = [
     "ReadPurpose",
     "ResolvedReadRequest",
     "ResourceMetadataRecord",
+    "ScheduleSourceRecord",
     "SafeReadRequest",
     "SessionExpired",
     "SessionProvider",
@@ -64,6 +73,7 @@ __all__ = [
     "SourceProtocolError",
     "SourceProvider",
     "SourceUnavailable",
+    "TimeWindow",
     "UnsupportedCapability",
     "WireResponse",
 ]

@@ -9,7 +9,19 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Generic, Protocol, TypeVar
 
-from ntulearn_skill.core import AttachmentId, Availability, ContentId, CourseId, Coverage
+from ntulearn_skill.core import (
+    AnnouncementId,
+    AssessmentId,
+    AssessmentSubtype,
+    AttachmentId,
+    Availability,
+    CalendarItemId,
+    ContentId,
+    CourseId,
+    Coverage,
+    GradingColumnId,
+    SourceTime,
+)
 
 
 class ReadPurpose(StrEnum):
@@ -17,6 +29,10 @@ class ReadPurpose(StrEnum):
     CONTENT = "content"
     RESOURCE_METADATA = "resource_metadata"
     RESOURCE_STREAM = "resource_stream"
+    ANNOUNCEMENTS = "announcements"
+    ASSESSMENTS = "assessments"
+    SCHEDULE = "schedule"
+    DUE_ITEMS = "due_items"
 
 
 class SessionStatus(StrEnum):
@@ -30,6 +46,10 @@ class SourceCapability(StrEnum):
     CONTENT_TREE = "content_tree"
     RESOURCE_METADATA = "resource_metadata"
     RESOURCE_STREAM = "resource_stream"
+    ANNOUNCEMENTS = "announcements"
+    ASSESSMENT_DETAILS = "assessment_details"
+    SCHEDULE_ITEMS = "schedule_items"
+    DUE_ITEMS = "due_items"
     AUTOMATIC_SESSION_RENEWAL = "automatic_session_renewal"
     REMOTE_DELTA = "remote_delta"
     CONDITIONAL_RESOURCE_READ = "conditional_resource_read"
@@ -259,6 +279,86 @@ class ContentSourceRecord:
     resources: tuple[ResourceMetadataRecord, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class TimeWindow:
+    """A bounded, aware source-query window."""
+
+    since: datetime
+    until: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            self.since.tzinfo is None
+            or self.since.utcoffset() is None
+            or self.until.tzinfo is None
+            or self.until.utcoffset() is None
+            or self.since >= self.until
+        ):
+            raise ValueError("time window must contain ordered aware timestamps")
+
+
+@dataclass(frozen=True, slots=True)
+class AnnouncementSourceRecord:
+    remote_id: AnnouncementId
+    course_id: CourseId
+    title: str
+    body: str
+    availability: Availability
+    created_at: SourceTime | None = None
+    modified_at: SourceTime | None = None
+    published_at: SourceTime | None = None
+    available_from: SourceTime | None = None
+    available_until: SourceTime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AssessmentSourceRecord:
+    remote_id: AssessmentId
+    course_id: CourseId
+    content_id: ContentId
+    grading_column_id: GradingColumnId | None
+    title: str
+    subtype: AssessmentSubtype
+    instructions: str
+    availability: Availability
+    created_at: SourceTime | None = None
+    modified_at: SourceTime | None = None
+    available_from: SourceTime | None = None
+    available_until: SourceTime | None = None
+    open_at: SourceTime | None = None
+    close_at: SourceTime | None = None
+    due_at: SourceTime | None = None
+    grading_due_at: SourceTime | None = None
+    generic_due_at: SourceTime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleSourceRecord:
+    remote_id: CalendarItemId
+    course_id: CourseId
+    title: str
+    availability: Availability
+    start_at: SourceTime | None = None
+    end_at: SourceTime | None = None
+    location: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DueSourceRecord:
+    remote_id: CalendarItemId
+    course_id: CourseId
+    title: str
+    calendar_id: str
+    item_source_id: str | None
+    item_source_type: str | None
+    availability: Availability
+    # These fields retain the provider's source names.  They are not automatically
+    # interpreted as event start/due semantics.
+    source_start_at: SourceTime | None = None
+    source_end_at: SourceTime | None = None
+    due_at: SourceTime | None = None
+
+
 class EphemeralByteStream:
     """One-shot resource bytes that retain no transport URL outside the transport layer."""
 
@@ -372,3 +472,30 @@ class SourceProvider(Protocol):
     def open_resource_stream(
         self, session: AuthorizedReadSession, resource: AttachmentId
     ) -> EphemeralByteStream: ...
+
+    def list_announcements(
+        self, session: AuthorizedReadSession, course: CourseId, page: PageRequest
+    ) -> Page[AnnouncementSourceRecord]: ...
+
+    def get_assessment(
+        self,
+        session: AuthorizedReadSession,
+        course: CourseId,
+        content: ContentId,
+    ) -> AssessmentSourceRecord: ...
+
+    def list_schedule_items(
+        self,
+        session: AuthorizedReadSession,
+        course: CourseId,
+        window: TimeWindow,
+        page: PageRequest,
+    ) -> Page[ScheduleSourceRecord]: ...
+
+    def list_due_items(
+        self,
+        session: AuthorizedReadSession,
+        course: CourseId,
+        window: TimeWindow,
+        page: PageRequest,
+    ) -> Page[DueSourceRecord]: ...

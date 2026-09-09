@@ -16,6 +16,8 @@ class SearchEntityKind(StrEnum):
     CONTENT = "content"
     MATERIAL = "material"
     CHUNK = "chunk"
+    ANNOUNCEMENT = "announcement"
+    ASSESSMENT = "assessment"
 
 
 class SearchTextOrigin(StrEnum):
@@ -26,6 +28,7 @@ class SearchTextOrigin(StrEnum):
 
 class SourceReferenceKind(StrEnum):
     SOURCE_OBJECT = "source_object"
+    SOURCE_OBSERVATION = "source_observation"
     SOURCE_LOCATOR = "source_locator"
 
 
@@ -153,3 +156,4 @@ class ResolvedSource:
     version_key: int | None
     locator: dict[str, JsonValue] | None
     chunks: tuple[DocumentChunkRecord, ...]
+    observation: dict[str, JsonValue] | None = None

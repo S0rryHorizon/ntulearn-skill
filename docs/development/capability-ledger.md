@@ -35,3 +35,22 @@ metadata under synthetic tests. Its session provider and wire executor must be
 supplied by an authorized integration. Resource bytes additionally require an
 explicit fresh-route capability; no browser credential extraction or automatic
 SSO executor is supplied. Exact download identity is checked before dispatch.
+
+## Bounded historical replay
+
+The implemented membership translator accepted a prior captured response and its
+terminal-page pagination. A single assessment content object also translated,
+using a synthetic page envelope. This does not validate a full child-list traversal
+or attachment discovery: those response samples were unavailable in the bounded
+capture set. Assessment/announcement translators were not yet implemented at this
+checkpoint. No network calls were made; detailed replay evidence is private.
+
+## Event-source implementation limits
+
+M6 supports synthetic announcement and assessment reads, immutable source observations,
+and deterministic candidate extraction. Ordinary schedule reads remain unsupported until
+a response shape is validated. Due-calendar start/end fields are retained without assuming
+they establish due semantics. Structured assessment due fields retain separate provenance.
+Prose extraction covers bounded English patterns with explicit dates, course weeks, and
+selected timezone forms; completed processing does not establish exhaustive event recall.
+Canonical reconciliation and automated event sync modes follow in M7 and M8.

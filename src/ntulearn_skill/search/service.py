@@ -60,6 +60,10 @@ _SCOPE_ALIASES = {
     "resources": "materials",
     "attachments": "materials",
     "documents": "materials",
+    "announcement": "announcements",
+    "announcements": "announcements",
+    "assessment": "assessments",
+    "assessments": "assessments",
 }
 
 
@@ -191,6 +195,32 @@ class SearchService:
                     None,
                     None,
                     (),
+                )
+
+            if reference.kind is SourceReferenceKind.SOURCE_OBSERVATION:
+                row = connection.execute(
+                    """
+                    SELECT provider.name AS provider, object.object_kind, object.remote_key,
+                           observation.snapshot_json
+                    FROM source_observation observation
+                    JOIN source_object object
+                      ON object.source_object_key = observation.source_object_key
+                    JOIN source_provider provider ON provider.provider_key = object.provider_key
+                    WHERE observation.observation_key = ?
+                    """,
+                    (reference.key,),
+                ).fetchone()
+                if row is None:
+                    raise SourceResolutionError("local source observation was not found")
+                return ResolvedSource(
+                    reference,
+                    str(row["provider"]),
+                    str(row["object_kind"]),
+                    str(row["remote_key"]),
+                    None,
+                    None,
+                    (),
+                    json.loads(str(row["snapshot_json"])),
                 )
 
             row = connection.execute(
@@ -385,6 +415,10 @@ class SearchService:
             expected.add("content")
         if SearchEntityKind.MATERIAL in kinds or SearchEntityKind.CHUNK in kinds:
             expected.add("materials")
+        if SearchEntityKind.ANNOUNCEMENT in kinds:
+            expected.add("announcements")
+        if SearchEntityKind.ASSESSMENT in kinds:
+            expected.add("assessments")
 
         views: list[CoverageView] = []
         for key in sorted(course_keys):

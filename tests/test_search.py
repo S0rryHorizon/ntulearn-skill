@@ -71,7 +71,7 @@ def _harness(tmp_path: Path) -> _Harness:
     domain = DomainRepository(database)
     resources = ResourceRepository(database)
     store = ResourceStore(paths, resources)
-    assert store.initialize() == 5
+    assert store.initialize() == 6
     course_id = CourseId("synthetic", "m5-course")
     content_id = ContentId("synthetic", "m5-content")
     domain.put_course(course_id, code="PH0000", title="Invented Search Course")
@@ -529,7 +529,7 @@ def test_migration_from_m4_rebuilds_existing_canonical_rows_on_first_search(
     course_id = CourseId("synthetic", "pre-m5-course")
     domain.put_course(course_id, code="CS0000", title="Preexisting Unicode 课程")
 
-    assert MigrationRunner(database).migrate() == 5
+    assert MigrationRunner(database).migrate() == 6
     assert not SearchIndex(database).is_current()
     new_course_id = CourseId("synthetic", "post-m5-course")
     domain.put_course(new_course_id, code="PH0000", title="Post-migration Course")

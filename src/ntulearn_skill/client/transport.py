@@ -24,6 +24,8 @@ class ReadOperation(StrEnum):
     DISCOVER_COURSES = "discover_courses"
     LIST_CONTENT_CHILDREN = "list_content_children"
     GET_CONTENT_DETAIL = "get_content_detail"
+    LIST_ANNOUNCEMENTS = "list_announcements"
+    LIST_DUE_ITEMS = "list_due_items"
     OPEN_RESOURCE_STREAM = "open_resource_stream"
 
 
@@ -66,6 +68,7 @@ class _OperationPolicy:
     purpose: ReadPurpose
     required_query: Mapping[str, str]
     numeric_query: frozenset[str] = frozenset()
+    required_text_query: frozenset[str] = frozenset()
     optional_query: frozenset[str] = frozenset()
     permits_redirect: bool = False
 
@@ -95,11 +98,24 @@ _POLICIES = {
     ),
     ReadOperation.GET_CONTENT_DETAIL: _OperationPolicy(
         re.compile(rf"/learn/api/v1/courses/{_SEGMENT}/contents/{_SEGMENT}"),
-        ReadPurpose.RESOURCE_METADATA,
+        ReadPurpose.ASSESSMENTS,
         {
             "expand": "assignedGroups,selfEnrollmentGroups.group,alignedGoals,gradebookCategory",
             "includeInActivityTracking": "false",
         },
+    ),
+    ReadOperation.LIST_ANNOUNCEMENTS: _OperationPolicy(
+        re.compile(rf"/learn/api/v1/courses/{_SEGMENT}/announcements"),
+        ReadPurpose.ANNOUNCEMENTS,
+        {"sort": "startDateRestriction(desc)"},
+        frozenset({"limit", "offset"}),
+    ),
+    ReadOperation.LIST_DUE_ITEMS: _OperationPolicy(
+        re.compile(rf"/learn/api/v1/courses/{_SEGMENT}/calendars/dueDateCalendarItems"),
+        ReadPurpose.DUE_ITEMS,
+        {"date_compare": "greaterOrEqual", "includeCount": "true"},
+        frozenset({"limit", "offset"}),
+        frozenset({"date"}),
     ),
     ReadOperation.OPEN_RESOURCE_STREAM: _OperationPolicy(
         re.compile(rf"/bbcswebdav/pid-{_SEGMENT}-dt-content-rid-{_SEGMENT}/xid-{_SEGMENT}"),
@@ -189,7 +205,9 @@ class ReadOnlyTransport:
         except (TypeError, ValueError):
             raise ReadPolicyViolation() from None
         keys = [key for key, _ in request.query]
-        required = set(policy.required_query) | set(policy.numeric_query)
+        required = (
+            set(policy.required_query) | set(policy.numeric_query) | set(policy.required_text_query)
+        )
         allowed = required | set(policy.optional_query)
         if (
             len(keys) != len(set(keys))
@@ -204,6 +222,10 @@ class ReadOnlyTransport:
             )
             or any(query.get(key) != value for key, value in policy.required_query.items())
             or any(not self._valid_number(query.get(key), key) for key in policy.numeric_query)
+            or any(
+                not query[key] or len(query[key]) > 64 or not query[key].isascii()
+                for key in policy.required_text_query
+            )
             or any(
                 not query[key] or len(query[key]) > 32
                 for key in policy.optional_query

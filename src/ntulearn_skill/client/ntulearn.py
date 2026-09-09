@@ -3,30 +3,51 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from types import MappingProxyType
 from urllib.parse import parse_qs, urlsplit
 
 from ntulearn_skill.client.contracts import (
+    AnnouncementSourceRecord,
+    AssessmentSourceRecord,
     AuthenticationRequired,
     AuthorizedReadSession,
     CapabilityState,
     ContentSourceRecord,
     CourseSourceRecord,
+    DueSourceRecord,
     EphemeralByteStream,
     Page,
     PageRequest,
     ReadPurpose,
     ResourceMetadataRecord,
+    ScheduleSourceRecord,
     SourceAccessDenied,
     SourceCapabilities,
     SourceCapability,
     SourceProtocolError,
     SourceUnavailable,
+    TimeWindow,
+    UnsupportedCapability,
 )
 from ntulearn_skill.client.transport import ReadOnlyTransport, ReadOperation, SafeReadRequest
-from ntulearn_skill.core import AttachmentId, Availability, ContentId, CourseId, Coverage
+from ntulearn_skill.core import (
+    AnnouncementId,
+    AssessmentId,
+    AssessmentSubtype,
+    AttachmentId,
+    Availability,
+    CalendarItemId,
+    ContentId,
+    CourseId,
+    Coverage,
+    GradingColumnId,
+    SourceTime,
+    TemporalPrecision,
+)
 
 _COURSE_QUERY = (
     ("organization", "false"),
@@ -39,12 +60,19 @@ _CONTENT_QUERY = (
     ("expand", "assignedGroups,selfEnrollmentGroups.group,gradebookCategory"),
     ("includeInActivityTracking", "true"),
 )
+_ASSESSMENT_QUERY = (
+    ("expand", "assignedGroups,selfEnrollmentGroups.group,alignedGoals,gradebookCategory"),
+    ("includeInActivityTracking", "false"),
+)
+_ANNOUNCEMENT_QUERY = (("sort", "startDateRestriction(desc)"),)
+_DUE_QUERY = (("date_compare", "greaterOrEqual"), ("includeCount", "true"))
 _UNKNOWN_CAPABILITIES = frozenset(
     {
         SourceCapability.AUTOMATIC_SESSION_RENEWAL,
         SourceCapability.REMOTE_DELTA,
         SourceCapability.CONDITIONAL_RESOURCE_READ,
         SourceCapability.COMPLETE_CROSS_COURSE_CALENDAR,
+        SourceCapability.SCHEDULE_ITEMS,
     }
 )
 
@@ -90,6 +118,7 @@ class NtulearnSourceAdapter:
         self._authorization_marker: object | None = None
         self._authorized_courses: set[CourseId] = set()
         self._containers: dict[CourseId, set[ContentId]] = {}
+        self._content: dict[CourseId, set[ContentId]] = {}
         self._resources: dict[AttachmentId, ResourceMetadataRecord] = {}
 
     @property
@@ -101,6 +130,9 @@ class NtulearnSourceAdapter:
             SourceCapability.COURSE_DISCOVERY,
             SourceCapability.CONTENT_TREE,
             SourceCapability.RESOURCE_METADATA,
+            SourceCapability.ANNOUNCEMENTS,
+            SourceCapability.ASSESSMENT_DETAILS,
+            SourceCapability.DUE_ITEMS,
         }
         if self._resource_request_factory is not None:
             supported.add(SourceCapability.RESOURCE_STREAM)
@@ -179,11 +211,121 @@ class NtulearnSourceAdapter:
             ReadOnlyTransport._safe_close(response)
         containers = self._containers.setdefault(course, set())
         for item in translated.items:
+            self._content.setdefault(course, set()).add(item.remote_id)
             if item.is_container:
                 containers.add(item.remote_id)
             for resource in item.resources:
                 self._resources[resource.remote_id] = resource
         return translated
+
+    def list_announcements(
+        self,
+        session: AuthorizedReadSession,
+        course: CourseId,
+        page: PageRequest,
+    ) -> Page[AnnouncementSourceRecord]:
+        self._require_session(session, ReadPurpose.ANNOUNCEMENTS)
+        self._require_active_session(session)
+        self.capabilities().require(SourceCapability.ANNOUNCEMENTS)
+        self._require_course(course)
+        course_segment = self._segment(course.value)
+        expected_path = f"/learn/api/v1/courses/{course_segment}/announcements"
+        scope = f"announcements:{course.value}"
+        offset = self._read_cursor(scope, page.cursor)
+        request = SafeReadRequest(
+            ReadOperation.LIST_ANNOUNCEMENTS,
+            expected_path,
+            (*_ANNOUNCEMENT_QUERY, ("limit", str(page.page_size)), ("offset", str(offset))),
+        )
+        response = self._transport.send(request, session)
+        try:
+            return self.translate_announcements_payload(
+                self._json(response.json_body),
+                course=course,
+                page=page,
+                expected_path=expected_path,
+            )
+        finally:
+            ReadOnlyTransport._safe_close(response)
+
+    def get_assessment(
+        self,
+        session: AuthorizedReadSession,
+        course: CourseId,
+        content: ContentId,
+    ) -> AssessmentSourceRecord:
+        self._require_session(session, ReadPurpose.ASSESSMENTS)
+        self._require_active_session(session)
+        self.capabilities().require(SourceCapability.ASSESSMENT_DETAILS)
+        self._require_course(course)
+        self._require_id(content, ContentId)
+        if content not in self._content.get(course, set()):
+            raise SourceAccessDenied()
+        expected_path = (
+            f"/learn/api/v1/courses/{self._segment(course.value)}"
+            f"/contents/{self._segment(content.value)}"
+        )
+        response = self._transport.send(
+            SafeReadRequest(ReadOperation.GET_CONTENT_DETAIL, expected_path, _ASSESSMENT_QUERY),
+            session,
+        )
+        try:
+            return self.translate_assessment_payload(
+                self._json(response.json_body), course=course, content=content
+            )
+        finally:
+            ReadOnlyTransport._safe_close(response)
+
+    def list_schedule_items(
+        self,
+        session: AuthorizedReadSession,
+        course: CourseId,
+        window: TimeWindow,
+        page: PageRequest,
+    ) -> Page[ScheduleSourceRecord]:
+        del session, course, window, page
+        raise UnsupportedCapability(
+            SourceCapability.SCHEDULE_ITEMS,
+            self.capabilities().state(SourceCapability.SCHEDULE_ITEMS),
+        )
+
+    def list_due_items(
+        self,
+        session: AuthorizedReadSession,
+        course: CourseId,
+        window: TimeWindow,
+        page: PageRequest,
+    ) -> Page[DueSourceRecord]:
+        self._require_session(session, ReadPurpose.DUE_ITEMS)
+        self._require_active_session(session)
+        self.capabilities().require(SourceCapability.DUE_ITEMS)
+        self._require_course(course)
+        if not isinstance(window, TimeWindow):
+            raise TypeError("window must be a TimeWindow")
+        expected_path = (
+            f"/learn/api/v1/courses/{self._segment(course.value)}/calendars/dueDateCalendarItems"
+        )
+        scope = f"due:{course.value}:{window.since.isoformat()}:{window.until.isoformat()}"
+        offset = self._read_cursor(scope, page.cursor)
+        query = (
+            ("date", window.since.isoformat()),
+            *_DUE_QUERY,
+            ("limit", str(page.page_size)),
+            ("offset", str(offset)),
+        )
+        response = self._transport.send(
+            SafeReadRequest(ReadOperation.LIST_DUE_ITEMS, expected_path, query), session
+        )
+        try:
+            return self.translate_due_items_payload(
+                self._json(response.json_body),
+                course=course,
+                window=window,
+                page=page,
+                expected_path=expected_path,
+            )
+        finally:
+            ReadOnlyTransport._safe_close(response)
 
     def get_resource_metadata(
         self, session: AuthorizedReadSession, resource: AttachmentId
@@ -329,6 +471,149 @@ class NtulearnSourceAdapter:
         next_cursor = None if next_offset is None else self._make_cursor(scope, next_offset)
         return Page(tuple(items), next_cursor, page_coverage)
 
+    def translate_announcements_payload(
+        self,
+        payload: Mapping[str, object],
+        *,
+        course: CourseId,
+        page: PageRequest,
+        expected_path: str,
+    ) -> Page[AnnouncementSourceRecord]:
+        self._require_id(course, CourseId)
+        scope = f"announcements:{course.value}"
+        offset = self._read_cursor(scope, page.cursor)
+        results, next_offset, page_coverage = self._page_parts(payload, offset, expected_path)
+        items: list[AnnouncementSourceRecord] = []
+        for raw in results:
+            source = self._mapping(raw)
+            body_value = source.get("body")
+            body = self._source_text(body_value)
+            items.append(
+                AnnouncementSourceRecord(
+                    remote_id=AnnouncementId(self.provider_name, self._required_text(source, "id")),
+                    course_id=course,
+                    title=self._first_text(source, "title", "subject") or "Announcement",
+                    body=body,
+                    availability=self._content_availability(source),
+                    created_at=self._parse_source_time(source.get("createdDate")),
+                    modified_at=self._parse_source_time(source.get("modifiedDate")),
+                    published_at=self._parse_source_time(source.get("publishedDate")),
+                    available_from=self._parse_source_time(source.get("startDateRestriction")),
+                    available_until=self._parse_source_time(source.get("endDateRestriction")),
+                )
+            )
+        next_cursor = None if next_offset is None else self._make_cursor(scope, next_offset)
+        return Page(tuple(items), next_cursor, page_coverage)
+
+    def translate_assessment_payload(
+        self,
+        payload: Mapping[str, object],
+        *,
+        course: CourseId,
+        content: ContentId,
+    ) -> AssessmentSourceRecord:
+        self._require_id(course, CourseId)
+        self._require_id(content, ContentId)
+        payload_id = payload.get("id")
+        if payload_id is not None and payload_id != content.value:
+            raise SourceProtocolError()
+        handler = payload.get("contentHandler")
+        handler_name = (
+            self._first_text(handler, "id", "name")
+            if isinstance(handler, Mapping)
+            else handler
+            if isinstance(handler, str) and handler.strip()
+            else ""
+        )
+        detail = self._handler_detail(payload.get("contentDetail"), str(handler_name))
+        assessment = self._find_named_mapping(detail, "assessment")
+        if assessment is None:
+            raise SourceProtocolError()
+        grading = self._find_named_mapping(detail, "gradingColumn")
+        grading_id = None
+        if grading is not None:
+            grading_id = GradingColumnId(self.provider_name, self._required_text(grading, "id"))
+        subtype_text = self._first_text(assessment, "assessmentType", "type") or str(handler_name)
+        subtype = self._assessment_subtype(subtype_text)
+        instructions = self._source_text(
+            assessment.get("instructions", assessment.get("description"))
+        )
+        availability = self._content_availability(payload)
+        generic_value = payload.get("genericReadOnlyData")
+        generic_read_only = generic_value if isinstance(generic_value, Mapping) else None
+        return AssessmentSourceRecord(
+            remote_id=AssessmentId(self.provider_name, self._required_text(assessment, "id")),
+            course_id=course,
+            content_id=content,
+            grading_column_id=grading_id,
+            title=self._first_text(payload, "title")
+            or self._first_text(assessment, "title", "name")
+            or "Assessment",
+            subtype=subtype,
+            instructions=instructions,
+            availability=availability,
+            created_at=self._parse_source_time(payload.get("createdDate")),
+            modified_at=self._parse_source_time(payload.get("modifiedDate")),
+            available_from=self._parse_source_time(payload.get("startDate")),
+            available_until=self._parse_source_time(payload.get("endDate")),
+            open_at=self._parse_source_time(assessment.get("openDate")),
+            close_at=self._parse_source_time(assessment.get("closeDate")),
+            due_at=self._parse_source_time(assessment.get("dueDate")),
+            grading_due_at=None
+            if grading is None
+            else self._parse_source_time(grading.get("dueDate")),
+            generic_due_at=None
+            if generic_read_only is None
+            else self._parse_source_time(generic_read_only.get("dueDate")),
+        )
+
+    def translate_due_items_payload(
+        self,
+        payload: Mapping[str, object],
+        *,
+        course: CourseId,
+        window: TimeWindow,
+        page: PageRequest,
+        expected_path: str,
+    ) -> Page[DueSourceRecord]:
+        self._require_id(course, CourseId)
+        scope = f"due:{course.value}:{window.since.isoformat()}:{window.until.isoformat()}"
+        offset = self._read_cursor(scope, page.cursor)
+        results, next_offset, page_coverage = self._page_parts(payload, offset, expected_path)
+        items: list[DueSourceRecord] = []
+        for raw in results:
+            source = self._mapping(raw)
+            calendar_id = self._required_text(source, "calendarId")
+            item_source_id = self._first_text(source, "itemSourceId")
+            item_source_type = self._first_text(source, "itemSourceType", "type")
+            if item_source_id is None or item_source_type is None:
+                raise SourceProtocolError()
+            composite_id = json.dumps(
+                [calendar_id, item_source_type, item_source_id],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+            items.append(
+                DueSourceRecord(
+                    remote_id=CalendarItemId(self.provider_name, composite_id),
+                    course_id=course,
+                    title=self._required_text(source, "title"),
+                    calendar_id=calendar_id,
+                    item_source_id=item_source_id,
+                    item_source_type=item_source_type,
+                    availability=self._content_availability(source),
+                    source_start_at=self._parse_source_time(source.get("startDate")),
+                    source_end_at=self._parse_source_time(source.get("endDate")),
+                    # Only an explicitly named due field has provider-neutral due semantics.
+                    due_at=self._parse_source_time(source.get("dueDate")),
+                )
+            )
+        next_cursor = None if next_offset is None else self._make_cursor(scope, next_offset)
+        # The observed endpoint accepts a lower bound but has no validated upper-bound
+        # parameter.  Preserve the requested window identity and report unknown coverage.
+        coverage = Coverage.PARTIAL if page_coverage is Coverage.PARTIAL else Coverage.UNKNOWN
+        return Page(tuple(items), next_cursor, coverage)
+
     def _resource_metadata(
         self,
         source: Mapping[str, object],
@@ -423,6 +708,8 @@ class NtulearnSourceAdapter:
                 "offset",
                 "expand",
                 "sort",
+                "date",
+                "date_compare",
                 "@view",
                 "includeInActivityTracking",
             }
@@ -463,6 +750,49 @@ class NtulearnSourceAdapter:
             if isinstance(value, str) and value.strip():
                 return value
         return None
+
+    @classmethod
+    def _source_text(cls, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            text = value
+        elif isinstance(value, Mapping):
+            text = cls._first_text(value, "rawText", "displayText", "text") or ""
+        else:
+            raise SourceProtocolError()
+        if len(text) > 256 * 1024:
+            raise SourceProtocolError()
+        return text
+
+    @classmethod
+    def _find_named_mapping(
+        cls, source: Mapping[str, object], name: str
+    ) -> Mapping[str, object] | None:
+        direct = source.get(name)
+        if isinstance(direct, Mapping):
+            return direct
+        for value in source.values():
+            if isinstance(value, Mapping) and isinstance(value.get(name), Mapping):
+                nested = value[name]
+                assert isinstance(nested, Mapping)
+                return nested
+        return None
+
+    @staticmethod
+    def _assessment_subtype(value: str) -> AssessmentSubtype:
+        normalized = value.lower()
+        if "assignment" in normalized:
+            return AssessmentSubtype.ASSIGNMENT
+        if "quiz" in normalized:
+            return AssessmentSubtype.QUIZ
+        if "exam" in normalized:
+            return AssessmentSubtype.EXAM
+        if "presentation" in normalized:
+            return AssessmentSubtype.PRESENTATION
+        if "test" in normalized or "asmt" in normalized:
+            return AssessmentSubtype.TEST
+        return AssessmentSubtype.OTHER
 
     @classmethod
     def _required_text(cls, source: Mapping[str, object], name: str) -> str:
@@ -508,6 +838,22 @@ class NtulearnSourceAdapter:
             return parsed.astimezone(UTC)
         raise SourceProtocolError()
 
+    @classmethod
+    def _parse_source_time(cls, value: object) -> SourceTime | None:
+        parsed = cls._parse_optional_time(value)
+        if parsed is None:
+            return None
+        if isinstance(value, str):
+            source_text = value
+            matched = re.search(r"(Z|[+-]\d{2}:?\d{2}(?::?\d{2})?)$", value)
+            if matched is None:
+                raise SourceProtocolError()
+            timezone = matched.group(1)
+        else:
+            source_text = str(value)
+            timezone = "UTC"
+        return SourceTime(parsed, source_text, timezone, TemporalPrecision.EXACT_TIME)
+
     def _require_session(self, session: AuthorizedReadSession, purpose: ReadPurpose) -> None:
         if (
             not isinstance(session, AuthorizedReadSession)
@@ -527,6 +873,7 @@ class NtulearnSourceAdapter:
         self._authorization_marker = session.marker
         self._authorized_courses.clear()
         self._containers.clear()
+        self._content.clear()
         self._resources.clear()
 
     def _require_active_session(self, session: AuthorizedReadSession) -> None:

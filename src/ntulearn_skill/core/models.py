@@ -59,6 +59,17 @@ class TemporalPrecision(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class AssessmentSubtype(StrEnum):
+    """Provider-neutral assessment kind without collapsing distinct event semantics."""
+
+    ASSIGNMENT = "assignment"
+    QUIZ = "quiz"
+    TEST = "test"
+    EXAM = "exam"
+    PRESENTATION = "presentation"
+    OTHER = "other"
+
+
 @dataclass(frozen=True, slots=True)
 class SourceTime:
     """A source time with normalized instant and retained source semantics."""

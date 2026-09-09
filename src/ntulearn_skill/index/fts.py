@@ -175,6 +175,8 @@ class SearchIndex:
             connection.execute("DELETE FROM search_document WHERE course_key = ?", (course_key,))
             cls._insert_courses(connection, course_key=course_key)
             cls._insert_content(connection, course_key=course_key)
+            cls._insert_announcements(connection, course_key=course_key)
+            cls._insert_assessments(connection, course_key=course_key)
             cls._insert_materials(connection, course_key=course_key)
             cls._insert_native_chunks(connection, course_key=course_key)
             cls._insert_derived_chunks(connection, course_key=course_key)
@@ -214,6 +216,8 @@ class SearchIndex:
         connection.execute("DELETE FROM search_document")
         SearchIndex._insert_courses(connection)
         SearchIndex._insert_content(connection)
+        SearchIndex._insert_announcements(connection)
+        SearchIndex._insert_assessments(connection)
         SearchIndex._insert_materials(connection)
         SearchIndex._insert_native_chunks(connection)
         SearchIndex._insert_derived_chunks(connection)
@@ -283,6 +287,56 @@ class SearchIndex:
             JOIN course c ON c.course_key = n.course_key
             WHERE (? IS NULL OR c.course_key = ?)
             ORDER BY n.content_key
+            """,
+            (course_key, course_key),
+        )
+
+    @staticmethod
+    def _insert_announcements(
+        connection: sqlite3.Connection, *, course_key: int | None = None
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, source_ref_kind, source_ref_key,
+                course_code, course_title, content_title, title, filename, semantic_type,
+                file_format, availability, text_origin, body
+            )
+            SELECT
+                'announcement', announcement.announcement_key, course.course_key,
+                'source_observation', announcement.current_observation_key,
+                course.code, course.title, '', announcement.title, '', '', '',
+                announcement.availability, 'metadata', announcement.body
+            FROM announcement
+            JOIN course ON course.course_key = announcement.course_key
+            WHERE (? IS NULL OR course.course_key = ?)
+            ORDER BY announcement.announcement_key
+            """,
+            (course_key, course_key),
+        )
+
+    @staticmethod
+    def _insert_assessments(
+        connection: sqlite3.Connection, *, course_key: int | None = None
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, source_ref_kind, source_ref_key,
+                course_code, course_title, content_title, title, filename, semantic_type,
+                file_format, availability, text_origin, body
+            )
+            SELECT
+                'assessment', assessment.assessment_key, course.course_key,
+                'source_observation', assessment.current_observation_key,
+                course.code, course.title, content.title, assessment.title, '',
+                'assessment_information', '', assessment.availability, 'metadata',
+                assessment.instructions
+            FROM assessment
+            JOIN course ON course.course_key = assessment.course_key
+            JOIN content_node content ON content.content_key = assessment.content_key
+            WHERE (? IS NULL OR course.course_key = ?)
+            ORDER BY assessment.assessment_key
             """,
             (course_key, course_key),
         )
