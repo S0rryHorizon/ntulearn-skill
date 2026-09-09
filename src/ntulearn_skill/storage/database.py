@@ -90,18 +90,41 @@ class Database:
 
     @contextmanager
     def transaction(self, *, immediate: bool = True) -> Iterator[sqlite3.Connection]:
-        """Run one logical operation atomically."""
+        """Run one logical operation atomically, including any dirty search index."""
 
         connection = self.connect()
         try:
             connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
             yield connection
+            self._refresh_search_index(connection)
             connection.commit()
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _refresh_search_index(connection: sqlite3.Connection) -> None:
+        """Refresh derived FTS rows before committing a relational source write."""
+
+        exists = connection.execute(
+            """SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'search_index_state'"""
+        ).fetchone()
+        if exists is None:
+            return
+        state = connection.execute(
+            """SELECT source_generation, indexed_generation
+            FROM search_index_state WHERE singleton_key = 1"""
+        ).fetchone()
+        if state is None or int(state["source_generation"]) == int(state["indexed_generation"]):
+            return
+        # Imported lazily so the storage connection policy remains usable before migration 0005
+        # and the index module can continue to depend on Database without an import cycle.
+        from ntulearn_skill.index.fts import SearchIndex
+
+        SearchIndex.refresh_dirty(connection)
 
     def integrity_check(self) -> bool:
         connection = self.connect()

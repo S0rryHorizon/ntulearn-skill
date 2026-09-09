@@ -1,0 +1,393 @@
+"""Disposable, transactionally invalidated SQLite FTS5 index."""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+
+from ntulearn_skill.storage.database import Database, StorageError
+
+
+class SearchIndexError(StorageError):
+    """Privacy-safe full-text index failure."""
+
+
+@dataclass(frozen=True, slots=True)
+class IndexRebuildResult:
+    document_count: int
+    fts_count: int
+    source_generation: int
+
+
+_SEMANTIC_TYPE_SQL = """
+COALESCE(
+    (
+        SELECT mc.semantic_type
+        FROM material_classification_selection selection
+        JOIN material_classification mc
+          ON mc.classification_key = selection.classification_key
+        JOIN classification_run cr
+          ON cr.classification_run_key = mc.classification_run_key
+        WHERE selection.resource_key = r.resource_key
+          AND (cr.version_key IS NULL OR cr.version_key IS v.version_key)
+        ORDER BY selection.selection_key DESC
+        LIMIT 1
+    ),
+    (
+        SELECT mc.semantic_type
+        FROM classification_run cr
+        JOIN material_classification mc
+          ON mc.classification_run_key = cr.classification_run_key
+        WHERE cr.resource_key = r.resource_key
+          AND (cr.version_key IS NULL OR cr.version_key IS v.version_key)
+          AND cr.status <> 'FAILED'
+        ORDER BY cr.created_at DESC, cr.classification_run_key DESC, mc.rank
+        LIMIT 1
+    ),
+    ''
+)
+"""
+
+_SEMANTIC_CONFIDENCE_SQL = """
+COALESCE(
+    (
+        SELECT mc.confidence
+        FROM material_classification_selection selection
+        JOIN material_classification mc
+          ON mc.classification_key = selection.classification_key
+        JOIN classification_run cr
+          ON cr.classification_run_key = mc.classification_run_key
+        WHERE selection.resource_key = r.resource_key
+          AND (cr.version_key IS NULL OR cr.version_key IS v.version_key)
+        ORDER BY selection.selection_key DESC
+        LIMIT 1
+    ),
+    (
+        SELECT mc.confidence
+        FROM classification_run cr
+        JOIN material_classification mc
+          ON mc.classification_run_key = cr.classification_run_key
+        WHERE cr.resource_key = r.resource_key
+          AND (cr.version_key IS NULL OR cr.version_key IS v.version_key)
+          AND cr.status <> 'FAILED'
+        ORDER BY cr.created_at DESC, cr.classification_run_key DESC, mc.rank
+        LIMIT 1
+    )
+)
+"""
+
+_FILENAME_SQL = """
+COALESCE(
+    (
+        SELECT observation.original_filename
+        FROM resource_observation observation
+        WHERE observation.resource_key = r.resource_key
+          AND (
+              v.version_key IS NULL
+              OR observation.version_key = v.version_key
+              OR observation.version_key IS NULL
+          )
+        ORDER BY
+            CASE WHEN observation.version_key = v.version_key THEN 0 ELSE 1 END,
+            observation.observed_at DESC,
+            observation.observation_key DESC
+        LIMIT 1
+    ),
+    ''
+)
+"""
+
+
+class SearchIndex:
+    """Build search documents only from canonical relational rows."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def rebuild(self) -> IndexRebuildResult:
+        try:
+            with self.database.transaction() as connection:
+                return self.rebuild_in_transaction(connection)
+        except sqlite3.Error:
+            raise SearchIndexError("full-text index rebuild failed") from None
+
+    def ensure_current(self, connection: sqlite3.Connection) -> IndexRebuildResult | None:
+        state = connection.execute(
+            """SELECT source_generation, indexed_generation
+            FROM search_index_state WHERE singleton_key = 1"""
+        ).fetchone()
+        if state is None:
+            raise SearchIndexError("full-text index state is unavailable")
+        if int(state["source_generation"]) == int(state["indexed_generation"]):
+            return None
+        return self.refresh_dirty(connection)
+
+    def is_current(self) -> bool:
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """SELECT source_generation = indexed_generation
+                FROM search_index_state WHERE singleton_key = 1"""
+            ).fetchone()
+            return row is not None and bool(row[0])
+        except sqlite3.Error:
+            raise SearchIndexError("full-text index state lookup failed") from None
+        finally:
+            connection.close()
+
+    def rebuild_in_transaction(self, connection: sqlite3.Connection) -> IndexRebuildResult:
+        """Replace derived rows atomically inside the caller's write transaction."""
+
+        return self._rebuild_documents(connection)
+
+    @classmethod
+    def refresh_dirty(cls, connection: sqlite3.Connection) -> IndexRebuildResult:
+        """Refresh only courses or resources dirtied by the current transaction."""
+
+        state = connection.execute(
+            """SELECT source_generation, indexed_generation
+            FROM search_index_state WHERE singleton_key = 1"""
+        ).fetchone()
+        if state is None:
+            raise SearchIndexError("full-text index state is unavailable")
+        generation = int(state["source_generation"])
+        if int(state["indexed_generation"]) < 0:
+            # Migration 0005 marks an existing database globally dirty.  A write
+            # before the first search may also queue a narrow dirty subset; that
+            # subset must not hide canonical rows created by older migrations.
+            return cls._rebuild_documents(connection)
+        dirty_courses = tuple(
+            int(row[0])
+            for row in connection.execute("SELECT course_key FROM search_dirty_course ORDER BY 1")
+        )
+        dirty_resources = tuple(
+            int(row[0])
+            for row in connection.execute(
+                "SELECT resource_key FROM search_dirty_resource ORDER BY 1"
+            )
+        )
+        if not dirty_courses and not dirty_resources:
+            # Migration 0005 marks an existing database globally dirty because earlier
+            # migrations could already contain canonical rows.
+            return cls._rebuild_documents(connection)
+
+        for course_key in dirty_courses:
+            connection.execute("DELETE FROM search_document WHERE course_key = ?", (course_key,))
+            cls._insert_courses(connection, course_key=course_key)
+            cls._insert_content(connection, course_key=course_key)
+            cls._insert_materials(connection, course_key=course_key)
+            cls._insert_native_chunks(connection, course_key=course_key)
+            cls._insert_derived_chunks(connection, course_key=course_key)
+
+        for resource_key in dirty_resources:
+            row = connection.execute(
+                """SELECT n.course_key FROM resource r
+                JOIN content_node n ON n.content_key = r.content_key
+                WHERE r.resource_key = ?""",
+                (resource_key,),
+            ).fetchone()
+            if row is not None and int(row["course_key"]) in dirty_courses:
+                continue
+            connection.execute(
+                "DELETE FROM search_document WHERE resource_key = ?", (resource_key,)
+            )
+            cls._insert_materials(connection, resource_key=resource_key)
+            cls._insert_native_chunks(connection, resource_key=resource_key)
+            cls._insert_derived_chunks(connection, resource_key=resource_key)
+
+        connection.execute("DELETE FROM search_dirty_course")
+        connection.execute("DELETE FROM search_dirty_resource")
+        connection.execute(
+            "UPDATE search_index_state SET indexed_generation = ? WHERE singleton_key = 1",
+            (generation,),
+        )
+        return cls._result(connection, generation)
+
+    @staticmethod
+    def _rebuild_documents(connection: sqlite3.Connection) -> IndexRebuildResult:
+        # An external-content FTS index can lose all postings while its canonical
+        # rows remain.  Repair those postings first so delete triggers can safely
+        # replace the relational projection below.
+        connection.execute(
+            "INSERT INTO search_document_fts(search_document_fts) VALUES ('rebuild')"
+        )
+        connection.execute("DELETE FROM search_document")
+        SearchIndex._insert_courses(connection)
+        SearchIndex._insert_content(connection)
+        SearchIndex._insert_materials(connection)
+        SearchIndex._insert_native_chunks(connection)
+        SearchIndex._insert_derived_chunks(connection)
+        state = connection.execute(
+            "SELECT source_generation FROM search_index_state WHERE singleton_key = 1"
+        ).fetchone()
+        if state is None:
+            raise SearchIndexError("full-text index state is unavailable")
+        generation = int(state["source_generation"])
+        connection.execute(
+            """UPDATE search_index_state SET indexed_generation = ?
+            WHERE singleton_key = 1""",
+            (generation,),
+        )
+        connection.execute("DELETE FROM search_dirty_course")
+        connection.execute("DELETE FROM search_dirty_resource")
+        return SearchIndex._result(connection, generation)
+
+    @staticmethod
+    def _result(connection: sqlite3.Connection, generation: int) -> IndexRebuildResult:
+        document_count = int(
+            connection.execute("SELECT count(*) FROM search_document").fetchone()[0]
+        )
+        fts_count = int(
+            connection.execute("SELECT count(*) FROM search_document_fts").fetchone()[0]
+        )
+        if document_count != fts_count:
+            raise SearchIndexError("full-text index verification failed")
+        connection.execute(
+            """INSERT INTO search_document_fts(search_document_fts, rank)
+            VALUES ('integrity-check', 1)"""
+        )
+        return IndexRebuildResult(document_count, fts_count, generation)
+
+    @staticmethod
+    def _insert_courses(connection: sqlite3.Connection, *, course_key: int | None = None) -> None:
+        connection.execute(
+            """
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, source_ref_kind, source_ref_key,
+                course_code, course_title, content_title, title, filename, semantic_type,
+                file_format, availability, text_origin, body
+            )
+            SELECT
+                'course', c.course_key, c.course_key, 'source_object', c.source_object_key,
+                c.code, c.title, '', c.title, '', '', '', c.availability, 'metadata', ''
+            FROM course c
+            WHERE (? IS NULL OR c.course_key = ?)
+            ORDER BY c.course_key
+            """,
+            (course_key, course_key),
+        )
+
+    @staticmethod
+    def _insert_content(connection: sqlite3.Connection, *, course_key: int | None = None) -> None:
+        connection.execute(
+            """
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, source_ref_kind, source_ref_key,
+                course_code, course_title, content_title, title, filename, semantic_type,
+                file_format, availability, text_origin, body
+            )
+            SELECT
+                'content', n.content_key, c.course_key, 'source_object', n.source_object_key,
+                c.code, c.title, n.title, n.title, '', '', '', n.availability, 'metadata', ''
+            FROM content_node n
+            JOIN course c ON c.course_key = n.course_key
+            WHERE (? IS NULL OR c.course_key = ?)
+            ORDER BY n.content_key
+            """,
+            (course_key, course_key),
+        )
+
+    @staticmethod
+    def _insert_materials(
+        connection: sqlite3.Connection,
+        *,
+        course_key: int | None = None,
+        resource_key: int | None = None,
+    ) -> None:
+        connection.execute(
+            f"""
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, resource_key, version_key,
+                source_ref_kind, source_ref_key, course_code, course_title, content_title,
+                title, filename, semantic_type, classification_confidence, file_format,
+                availability, text_origin, body
+            )
+            SELECT
+                'material', r.resource_key, c.course_key, r.resource_key, v.version_key,
+                'source_object', r.source_object_key, c.code, c.title, n.title,
+                r.display_title, {_FILENAME_SQL}, {_SEMANTIC_TYPE_SQL},
+                {_SEMANTIC_CONFIDENCE_SQL}, COALESCE(v.file_format, ''),
+                r.availability, 'metadata', ''
+            FROM resource r
+            JOIN content_node n ON n.content_key = r.content_key
+            JOIN course c ON c.course_key = n.course_key
+            LEFT JOIN resource_version v ON v.version_key = r.current_version_key
+            WHERE (? IS NULL OR c.course_key = ?)
+              AND (? IS NULL OR r.resource_key = ?)
+            ORDER BY r.resource_key
+            """,
+            (course_key, course_key, resource_key, resource_key),
+        )
+
+    @staticmethod
+    def _insert_native_chunks(
+        connection: sqlite3.Connection,
+        *,
+        course_key: int | None = None,
+        resource_key: int | None = None,
+    ) -> None:
+        connection.execute(
+            f"""
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, resource_key, version_key, chunk_key,
+                source_ref_kind, source_ref_key, course_code, course_title, content_title,
+                title, filename, semantic_type, classification_confidence, file_format,
+                availability, parse_coverage, text_origin, body
+            )
+            SELECT
+                'chunk', chunk.chunk_key, c.course_key, r.resource_key, v.version_key,
+                chunk.chunk_key, 'source_locator', locator.locator_key, c.code, c.title, n.title,
+                r.display_title, {_FILENAME_SQL}, {_SEMANTIC_TYPE_SQL},
+                {_SEMANTIC_CONFIDENCE_SQL}, v.file_format, r.availability, parsed.coverage,
+                'native', chunk.native_text
+            FROM document_chunk chunk
+            JOIN source_locator locator ON locator.chunk_key = chunk.chunk_key
+            JOIN parsed_document parsed ON parsed.parse_key = chunk.parse_key
+            JOIN resource_version v ON v.version_key = parsed.version_key
+            JOIN resource r ON r.resource_key = v.resource_key
+            JOIN content_node n ON n.content_key = r.content_key
+            JOIN course c ON c.course_key = n.course_key
+            WHERE (? IS NULL OR c.course_key = ?)
+              AND (? IS NULL OR r.resource_key = ?)
+            ORDER BY chunk.chunk_key
+            """,
+            (course_key, course_key, resource_key, resource_key),
+        )
+
+    @staticmethod
+    def _insert_derived_chunks(
+        connection: sqlite3.Connection,
+        *,
+        course_key: int | None = None,
+        resource_key: int | None = None,
+    ) -> None:
+        connection.execute(
+            f"""
+            INSERT INTO search_document(
+                entity_kind, entity_key, course_key, resource_key, version_key, chunk_key,
+                representation_key, source_ref_kind, source_ref_key, course_code, course_title,
+                content_title, title, filename, semantic_type, classification_confidence,
+                file_format, availability, parse_coverage, text_origin, body
+            )
+            SELECT
+                'chunk', representation.representation_key, c.course_key, r.resource_key,
+                v.version_key, chunk.chunk_key, representation.representation_key,
+                'source_locator', locator.locator_key, c.code, c.title, n.title,
+                r.display_title, {_FILENAME_SQL}, {_SEMANTIC_TYPE_SQL},
+                {_SEMANTIC_CONFIDENCE_SQL}, v.file_format, r.availability, parsed.coverage,
+                'derived:' || representation.representation_kind, representation.text
+            FROM chunk_representation representation
+            JOIN document_chunk chunk ON chunk.chunk_key = representation.chunk_key
+            JOIN source_locator locator ON locator.chunk_key = chunk.chunk_key
+            JOIN parsed_document parsed ON parsed.parse_key = chunk.parse_key
+            JOIN resource_version v ON v.version_key = parsed.version_key
+            JOIN resource r ON r.resource_key = v.resource_key
+            JOIN content_node n ON n.content_key = r.content_key
+            JOIN course c ON c.course_key = n.course_key
+            WHERE representation.text IS NOT NULL
+              AND (? IS NULL OR c.course_key = ?)
+              AND (? IS NULL OR r.resource_key = ?)
+            ORDER BY representation.representation_key
+            """,
+            (course_key, course_key, resource_key, resource_key),
+        )
