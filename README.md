@@ -7,9 +7,11 @@ event evidence, conflicts and synchronization state under a private runtime root
 
 > **Release status: NOT READY FOR PUBLIC RELEASE.** Phase 3 implementation passed
 > its synthetic acceptance gates. Phase 4 synthetic and runtime-safety validation
-> passed, but current end-to-end live NTULearn transport validation is blocked and
-> remains **NOT VALIDATED**. Phase 5 offline hardening passed; the live gate and final human release decision
-> remain open. See the [release checklist](docs/development/public-release-checklist.md).
+> passed. A bounded browser-assisted live follow-up is in progress; the raw API
+> transport remains **NOT VALIDATED**. Phase 5 offline hardening passed; the remaining
+> live checks and final human release decision remain open. See the
+> [connection follow-up](docs/development/connection-followup.md) and
+> [release checklist](docs/development/public-release-checklist.md).
 
 ## What is implemented
 
@@ -25,18 +27,23 @@ event evidence, conflicts and synchronization state under a private runtime root
 - Versioned JSON result envelopes that report freshness, coverage, conflicts,
   provenance, warnings and privacy-safe errors.
 - A thin Python `CodexToolDispatcher` over the same core API.
+- A host browser capture provider wired into the normal Core/CLI, with a thin
+  [Codex browser skill](skills/ntulearn-browser/SKILL.md) for authorized collection.
 
-The Codex dispatcher is a Python integration surface. This repository does not
-install a Codex plugin, run an LLM agent or provide a ChatGPT adapter.
+The Codex dispatcher is a Python integration surface. The browser skill requires a
+supported connected host; this repository does not install a browser plugin, run an
+LLM agent or provide a ChatGPT adapter.
 
 ## Current limits
 
 Synthetic and offline acceptance does not establish live NTULearn compatibility.
 The repository does not include automatic SSO, browser credential extraction,
-cookie copying or session renewal. A live integration must inject a currently
-authorized session provider and a guarded read-only source/transport. Real resource
-download routing is also unavailable until that integration supplies a validated
-fresh-route factory.
+cookie copying or session renewal. The supported browser-assisted path uses normal
+UI reads and downloads, followed by the configured CLI; see the
+[browser usage guide](docs/usage-browser.md). Standalone CLI queries remain local.
+The separate raw API integration still needs a concrete authorized session, wire
+executor and validated fresh resource route; browser-assisted acceptance does not
+validate those components.
 
 Search is lexical rather than semantic. The built-in parsers cover PDF and DOCX;
 real PPTX, scanned-document fallback quality, complex DOCX tables, ordinary schedule
@@ -90,10 +97,12 @@ Automation should inspect both the exit code and the versioned JSON envelope.
 ## Python API and source integration
 
 The public Python facade is `ntulearn_skill.core.api.CoreService`. Local-only use can
-start with `CoreService.from_runtime()`. Sync and fetch calls require a `SyncEngine`
-constructed with caller-supplied implementations of the typed `SessionProvider` and
-`SourceProvider` contracts. The repository's NTULearn adapter accepts a guarded
-`ReadOnlyTransport`, but it does not create or recover an authenticated session.
+start with `CoreService.from_runtime()`. Browser-assisted sync and fetch use
+`CoreService.from_runtime(root, browser_capture=private_manifest)`, which constructs
+the built-in provider and synchronization engine. Raw API or custom integrations can
+instead supply a `SyncEngine` composed from the typed `SessionProvider` and
+`SourceProvider` contracts. The separate NTULearn API adapter accepts a guarded
+`ReadOnlyTransport`, but does not create or recover an authenticated session.
 
 See [usage](docs/usage.md) for verified method signatures and a minimal composition
 example. Source integration must remain within the read-only policy described in

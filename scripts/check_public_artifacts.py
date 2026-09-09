@@ -267,7 +267,7 @@ def _check_sdist_member(path: PurePosixPath) -> None:
         "pyproject.toml",
         "uv.lock",
     }
-    allowed_roots = {".github", "docs", "examples", "scripts", "src", "tests"}
+    allowed_roots = {".github", "docs", "examples", "scripts", "skills", "src", "tests"}
     if len(path.parts) == 1 and path.name in allowed_files:
         return
     if path.parts[0] in allowed_roots:

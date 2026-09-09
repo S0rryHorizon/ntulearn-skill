@@ -148,10 +148,14 @@ ntulearn sync
 ntulearn fetch 3 --verify
 ```
 
-The installed CLI creates a local `CoreService` without a source engine. In that default
+Without `--browser-capture`, the installed CLI creates a local `CoreService` without a
+source engine. In that default
 configuration these commands fail safely with exit `1` and the code
-`sync_engine_unavailable`. This is expected: the package includes no automatic SSO,
-browser credential extraction or working live credential configuration.
+`sync_engine_unavailable`. Supply the host-prepared private bundle using
+`--browser-capture PRIVATE_MANIFEST` to use the built-in browser capture provider and
+existing engine. See [browser-assisted use](usage-browser.md). The package includes
+no automatic SSO or browser credential extraction. The composition below is for a
+custom or raw API integration, not a requirement for ordinary browser-assisted use.
 
 A host application can compose the implemented core with its own authorized providers.
 This example uses the actual constructor signatures while leaving authentication and
@@ -198,7 +202,7 @@ as a working configuration.
 The main methods are:
 
 ```text
-CoreService.from_runtime(root=None, *, sync_engine=None, initialize=True)
+CoreService.from_runtime(root=None, *, sync_engine=None, browser_capture=None, initialize=True)
 list_courses(filter=CourseFilter(), freshness=cache_only())
 list_materials(course, filter=MaterialFilter(), freshness=cache_only())
 search(query, freshness=cache_only())

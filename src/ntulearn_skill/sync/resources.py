@@ -164,7 +164,17 @@ class ResourceFetchService:
             )
             current = self.store.repository.get_current_version(attachment_id)
             basis = self._comparison_basis(attachment_id, current)
-            reason = self._policy_reason(evidence, current, basis, verify=verify, observed_at=clock)
+            capture_replay = bool(
+                verify
+                and basis is not None
+                and basis.verified_at == clock
+                and self._capture_replayed(sync_run_key)
+            )
+            reason = (
+                "within_verification_interval"
+                if capture_replay
+                else self._policy_reason(evidence, current, basis, verify=verify, observed_at=clock)
+            )
             if reason == "within_verification_interval":
                 assert current is not None and basis is not None and basis.verified_at is not None
                 stored_resource, observation = self.store.observe(
@@ -198,7 +208,11 @@ class ResourceFetchService:
                     receipt_key,
                     plan,
                     None,
-                    receipt_warnings,
+                    (
+                        ("capture_replay_assumed_not_reverified", *receipt_warnings)
+                        if capture_replay
+                        else receipt_warnings
+                    ),
                 )
 
             previous_hash = None if current is None else current.sha256
@@ -603,6 +617,46 @@ class ResourceFetchService:
         if observed_at - basis.verified_at >= self.verification_interval:
             return "verification_expired"
         return "within_verification_interval"
+
+    def _capture_replayed(self, sync_run_key: int) -> bool:
+        connection = self.store.repository.database.connect()
+        try:
+            current = connection.execute(
+                "SELECT requested_scope_json FROM sync_run WHERE sync_run_key = ?",
+                (sync_run_key,),
+            ).fetchone()
+            if current is None:
+                return False
+            context = json.loads(str(current["requested_scope_json"]))
+            if (
+                not isinstance(context, dict)
+                or context.get("capture_source_kind") != "host_browser_ui"
+            ):
+                return False
+            capture_id = context.get("capture_id")
+            if not isinstance(capture_id, str):
+                return False
+            rows = connection.execute(
+                """SELECT requested_scope_json FROM sync_run
+                WHERE sync_run_key < ? AND status != 'RUNNING'""",
+                (sync_run_key,),
+            ).fetchall()
+            for row in rows:
+                try:
+                    previous = json.loads(str(row["requested_scope_json"]))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+                if (
+                    isinstance(previous, dict)
+                    and previous.get("capture_source_kind") == "host_browser_ui"
+                    and previous.get("capture_id") == capture_id
+                ):
+                    return True
+            return False
+        except (json.JSONDecodeError, sqlite3.Error, TypeError, ValueError):
+            return False
+        finally:
+            connection.close()
 
     def _persist_receipt_and_jobs(
         self,

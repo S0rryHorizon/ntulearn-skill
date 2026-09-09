@@ -22,9 +22,19 @@ class SyncRunRecorder:
         self.database = database
         self.provider_name = provider_name
 
-    def start(self, *, mode: str, requested_scope: Mapping[str, bool | int]) -> int:
+    def start(self, *, mode: str, requested_scope: Mapping[str, bool | int | str]) -> int:
         if not mode.strip() or any(
-            not isinstance(key, str) or not isinstance(value, (bool, int))
+            not isinstance(key, str)
+            or not key.isascii()
+            or len(key) > 80
+            or not isinstance(value, (bool, int, str))
+            or isinstance(value, str)
+            and (
+                len(value) > 2048
+                or any(ord(character) < 32 for character in value)
+                or "?" in value
+                or "#" in value
+            )
             for key, value in requested_scope.items()
         ):
             raise ValueError("sync request must contain only safe scalar controls")

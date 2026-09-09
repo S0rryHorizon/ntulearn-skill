@@ -27,9 +27,9 @@ from ntulearn_skill.client import (
     SourceUnavailable,
     TimeWindow,
     safe_source_error_category,
+    source_observed_at,
 )
 from ntulearn_skill.core import ContentId, CourseId, Coverage
-from ntulearn_skill.core.models import utc_now
 from ntulearn_skill.events import EventRepository, EventStorageError
 from ntulearn_skill.sync.models import ScopeResult, SyncWarning
 
@@ -239,7 +239,11 @@ class EventSourceSync:
                     break
                 item = self.source.get_assessment(session, course, content_id)
                 self._validate_assessment(item, course, content_id)
-                observed = self.repository.observe_assessment(item, sync_run_key=run_key)
+                observed = self.repository.observe_assessment(
+                    item,
+                    sync_run_key=run_key,
+                    observed_at=source_observed_at(self.source),
+                )
                 keys.append(observed.observation.key)
                 progress.items_seen += 1
             else:
@@ -272,13 +276,25 @@ class EventSourceSync:
     def _observe(self, scope: EventSourceScope, item: object, run_key: int) -> int:
         if scope is EventSourceScope.ANNOUNCEMENTS:
             assert isinstance(item, AnnouncementSourceRecord)
-            observed = self.repository.observe_announcement(item, sync_run_key=run_key)
+            observed = self.repository.observe_announcement(
+                item,
+                sync_run_key=run_key,
+                observed_at=source_observed_at(self.source),
+            )
         elif scope is EventSourceScope.SCHEDULE:
             assert isinstance(item, ScheduleSourceRecord)
-            observed = self.repository.observe_schedule(item, sync_run_key=run_key)
+            observed = self.repository.observe_schedule(
+                item,
+                sync_run_key=run_key,
+                observed_at=source_observed_at(self.source),
+            )
         elif scope is EventSourceScope.DUE_ITEMS:
             assert isinstance(item, DueSourceRecord)
-            observed = self.repository.observe_due_item(item, sync_run_key=run_key)
+            observed = self.repository.observe_due_item(
+                item,
+                sync_run_key=run_key,
+                observed_at=source_observed_at(self.source),
+            )
         else:
             raise AssertionError("assessment observation uses its dedicated path")
         return observed.observation.key
@@ -303,7 +319,7 @@ class EventSourceSync:
             False,
             "unsupported_capability",
             (SyncWarning.PAGE_COVERAGE_UNKNOWN,),
-            utc_now(),
+            source_observed_at(self.source),
         )
 
     def _scope(self, scope: EventSourceScope, course: CourseId, progress: _Progress) -> ScopeResult:
@@ -317,7 +333,7 @@ class EventSourceSync:
             progress.pagination_complete,
             progress.failure_category,
             tuple(progress.warnings),
-            utc_now(),
+            source_observed_at(self.source),
         )
 
     def _acquire(self, purpose: ReadPurpose) -> AuthorizedReadSession:

@@ -53,6 +53,12 @@ def _confidence(value: str) -> float:
 def _common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     parser.add_argument("--root", default=argparse.SUPPRESS, metavar="PRIVATE_ROOT")
+    parser.add_argument(
+        "--browser-capture",
+        default=argparse.SUPPRESS,
+        metavar="PRIVATE_MANIFEST",
+        help="Use a private host browser observation bundle for source reads",
+    )
 
 
 def _freshness_options(parser: argparse.ArgumentParser) -> None:

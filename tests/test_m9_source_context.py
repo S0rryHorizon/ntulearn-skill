@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -43,10 +44,10 @@ STREAM_QUERY = (
 )
 
 
-def _pdf_bytes() -> bytes:
+def _pdf_bytes(text: str = "Synthetic source context") -> bytes:
     output = io.BytesIO()
     document = canvas.Canvas(output, pagesize=(612, 792), invariant=1)
-    document.drawString(72, 720, "Synthetic source context")
+    document.drawString(72, 720, text)
     document.save()
     return output.getvalue()
 
@@ -156,9 +157,7 @@ def _seed(paths: RuntimePaths) -> None:
     engine = _engine(paths, _Sessions(), _adapter(executor))
     result = engine.sync_course(
         COURSE,
-        window=TimeWindow(
-            datetime(2030, 1, 1, tzinfo=UTC), datetime(2030, 2, 1, tzinfo=UTC)
-        ),
+        window=TimeWindow(datetime(2030, 1, 1, tzinfo=UTC), datetime(2030, 2, 1, tzinfo=UTC)),
         event_scopes=frozenset(),
     )
     assert result.status.value == "SUCCEEDED"
@@ -191,6 +190,28 @@ def test_standalone_fetch_rebuilds_adapter_context_after_restart(tmp_path: Path)
         ReadOperation.LIST_CONTENT_CHILDREN,
         ReadOperation.OPEN_RESOURCE_STREAM,
     ]
+
+
+def test_restarted_fetch_promotes_new_bytes_after_context_rediscovery(tmp_path: Path) -> None:
+    paths = RuntimePaths(tmp_path / "private-runtime")
+    _seed(paths)
+    changed = _pdf_bytes("Synthetic updated source context")
+
+    def executor(request, session, forward_credentials):
+        del session, forward_credentials
+        if request.operation is ReadOperation.DISCOVER_COURSES:
+            return WireResponse(200, json_body=_course_payload())
+        if request.operation is ReadOperation.LIST_CONTENT_CHILDREN:
+            return WireResponse(200, json_body=_content_payload())
+        return WireResponse(200, body_chunks=(changed,))
+
+    restarted = _engine(paths, _Sessions(), _adapter(executor))
+    restarted.fetch_resource(ATTACHMENT, verify=True)
+    repository = ResourceRepository(Database(paths.database))
+    current = repository.get_current_version(ATTACHMENT)
+    assert current is not None
+    assert current.sha256 == hashlib.sha256(changed).hexdigest()
+    assert len(repository.list_versions(ATTACHMENT)) == 2
 
 
 def test_bounded_context_rediscovery_failure_retains_cached_bytes(tmp_path: Path) -> None:

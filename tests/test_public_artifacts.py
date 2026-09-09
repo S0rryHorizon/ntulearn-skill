@@ -96,6 +96,22 @@ def test_sdist_rejects_links(tmp_path: Path) -> None:
         audit_sdist(sdist)
 
 
+@pytest.mark.parametrize("private", [False, True])
+def test_sdist_skill_keeps_private_path_boundary(tmp_path: Path, private: bool) -> None:
+    sdist = tmp_path / "ntulearn_skill-0.0.0.tar.gz"
+    member = "skills/demo/.local/session.json" if private else "skills/demo/SKILL.md"
+    with tarfile.open(sdist, "w:gz") as archive:
+        content = b"Synthetic skill instructions.\n"
+        entry = tarfile.TarInfo(f"ntulearn_skill-0.0.0/{member}")
+        entry.size = len(content)
+        archive.addfile(entry, io.BytesIO(content))
+    if private:
+        with pytest.raises(AuditError):
+            audit_sdist(sdist)
+    else:
+        assert audit_sdist(sdist) == 1
+
+
 def test_tracked_parent_symlink_cannot_escape_repository(tmp_path: Path) -> None:
     root = tmp_path / "repository"
     outside = tmp_path / "outside"

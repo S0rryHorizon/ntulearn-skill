@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Generic, Protocol, TypeVar
@@ -539,3 +539,15 @@ class SourceProvider(Protocol):
         window: TimeWindow,
         page: PageRequest,
     ) -> Page[DueSourceRecord]: ...
+
+
+def source_observed_at(source: object) -> datetime:
+    """Use a provider snapshot time when supplied, otherwise use the live read time."""
+
+    try:
+        value = getattr(source, "observed_at", None)
+    except Exception:
+        value = None
+    if isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None:
+        return value.astimezone(UTC)
+    return datetime.now(UTC)

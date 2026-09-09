@@ -18,6 +18,7 @@ class SyncWarning(StrEnum):
     PAGE_CAP_REACHED = "page_cap_reached"
     CONTENT_NODE_CAP_REACHED = "content_node_cap_reached"
     DUPLICATE_CONTENT_NODE = "duplicate_content_node"
+    CAPTURE_REPLAY_ASSUMED_NOT_REVERIFIED = "capture_replay_assumed_not_reverified"
     SOURCE_FAILURE = "source_failure"
 
 

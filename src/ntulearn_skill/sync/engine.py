@@ -25,6 +25,7 @@ from ntulearn_skill.client import (
     SourceProvider,
     SourceUnavailable,
     TimeWindow,
+    source_observed_at,
 )
 from ntulearn_skill.core import AttachmentId, Availability, ContentId, CourseId, Coverage
 from ntulearn_skill.core.models import FetchDecision, SyncRunStatus, utc_now
@@ -250,14 +251,16 @@ class SyncEngine:
         )
         run_key = self.recorder.start(
             mode="all",
-            requested_scope={
-                "fetch_resources": fetch_resources,
-                "verify_resources": verify_resources,
-                "page_size": page_size,
-                "max_pages_per_scope": max_pages_per_scope,
-                "max_content_nodes": max_content_nodes,
-                "max_jobs_per_course": max_jobs_per_course,
-            },
+            requested_scope=self._requested_scope(
+                {
+                    "fetch_resources": fetch_resources,
+                    "verify_resources": verify_resources,
+                    "page_size": page_size,
+                    "max_pages_per_scope": max_pages_per_scope,
+                    "max_content_nodes": max_content_nodes,
+                    "max_jobs_per_course": max_jobs_per_course,
+                }
+            ),
         )
         progress = _RunProgress()
         try:
@@ -314,7 +317,7 @@ class SyncEngine:
             raise ValueError("resource must belong to the source provider")
         run_key = self.recorder.start(
             mode="resource",
-            requested_scope={"verify": verify, "max_jobs": max_jobs},
+            requested_scope=self._requested_scope({"verify": verify, "max_jobs": max_jobs}),
         )
         progress = _RunProgress()
         try:
@@ -323,6 +326,13 @@ class SyncEngine:
                 sync_run_key=run_key,
                 verify=verify,
                 refresh_source_context=True,
+                # Snapshot imports keep capture time; live rediscovery must let the
+                # fetch service sample its clock after authorization is rebuilt.
+                observed_at=(
+                    source_observed_at(self.source)
+                    if isinstance(getattr(self.source, "observed_at", None), datetime)
+                    else None
+                ),
             )
             failed = result.fetch_decision is FetchDecision.FAILED
             progress.resources_fetched = 0 if failed else 1
@@ -330,6 +340,11 @@ class SyncEngine:
             if result.job_plan is not None:
                 progress.job_keys.update(result.job_plan.keys)
             recovery_warning = result.warning_codes[0] if result.warning_codes else None
+            sync_warning = (
+                SyncWarning.CAPTURE_REPLAY_ASSUMED_NOT_REVERIFIED
+                if recovery_warning == "capture_replay_assumed_not_reverified"
+                else SyncWarning.SOURCE_FAILURE
+            )
             progress.scopes.append(
                 ScopeResult(
                     self.source.provider_name,
@@ -346,12 +361,8 @@ class SyncEngine:
                     0 if failed else 1,
                     not failed and recovery_warning is None,
                     result.error_category if failed else recovery_warning,
-                    (
-                        (SyncWarning.SOURCE_FAILURE,)
-                        if failed or recovery_warning is not None
-                        else ()
-                    ),
-                    utc_now(),
+                    ((sync_warning,) if failed or recovery_warning is not None else ()),
+                    source_observed_at(self.source),
                 )
             )
             self._run_jobs(progress, None, max_jobs=max_jobs)
@@ -475,16 +486,18 @@ class SyncEngine:
             raise ValueError("course must be observed before a scoped refresh")
         run_key = self.recorder.start(
             mode=mode,
-            requested_scope={
-                "include_availability": include_availability,
-                "include_content": include_content,
-                "fetch_resources": fetch_resources,
-                "verify_resources": verify_resources,
-                "page_size": page_size,
-                "max_pages_per_scope": max_pages_per_scope,
-                "max_content_nodes": max_content_nodes,
-                "max_jobs": max_jobs,
-            },
+            requested_scope=self._requested_scope(
+                {
+                    "include_availability": include_availability,
+                    "include_content": include_content,
+                    "fetch_resources": fetch_resources,
+                    "verify_resources": verify_resources,
+                    "page_size": page_size,
+                    "max_pages_per_scope": max_pages_per_scope,
+                    "max_content_nodes": max_content_nodes,
+                    "max_jobs": max_jobs,
+                }
+            ),
         )
         progress = _RunProgress()
         try:
@@ -610,7 +623,12 @@ class SyncEngine:
         failures = 0
         recovery_warnings: list[str] = []
         for resource in discovery.resources:
-            result = self.resources.fetch(resource, sync_run_key=run_key, verify=verify)
+            result = self.resources.fetch(
+                resource,
+                sync_run_key=run_key,
+                verify=verify,
+                observed_at=source_observed_at(self.source),
+            )
             if result.fetch_decision is FetchDecision.FAILED:
                 failures += 1
             else:
@@ -631,6 +649,11 @@ class SyncEngine:
             coverage = (
                 Coverage.PARTIAL if successful or content_scope is not None else Coverage.FAILED
             )
+        sync_warning = (
+            SyncWarning.CAPTURE_REPLAY_ASSUMED_NOT_REVERIFIED
+            if recovery_warnings and recovery_warnings[0] == "capture_replay_assumed_not_reverified"
+            else SyncWarning.SOURCE_FAILURE
+        )
         progress.scopes.append(
             ScopeResult(
                 self.source.provider_name,
@@ -645,8 +668,8 @@ class SyncEngine:
                 else recovery_warnings[0]
                 if recovery_warnings
                 else None,
-                (SyncWarning.SOURCE_FAILURE,) if failures or recovery_warnings else (),
-                utc_now(),
+                (sync_warning,) if failures or recovery_warnings else (),
+                source_observed_at(self.source),
             )
         )
 
@@ -663,8 +686,7 @@ class SyncEngine:
             return None
         capabilities = self.source.capabilities()
         if (
-            capabilities.state(SourceCapability.COURSE_DISCOVERY)
-            is not CapabilityState.SUPPORTED
+            capabilities.state(SourceCapability.COURSE_DISCOVERY) is not CapabilityState.SUPPORTED
             or capabilities.state(SourceCapability.CONTENT_TREE) is not CapabilityState.SUPPORTED
         ):
             return None
@@ -755,7 +777,7 @@ class SyncEngine:
     def _refresh_courses(self, *, max_jobs: int) -> SyncRunResult:
         run_key = self.recorder.start(
             mode="refresh",
-            requested_scope={"course_inventory": True, "max_jobs": max_jobs},
+            requested_scope=self._requested_scope({"course_inventory": True, "max_jobs": max_jobs}),
         )
         progress = _RunProgress()
         try:
@@ -764,6 +786,22 @@ class SyncEngine:
             return self._finish(run_key, progress, None)
         except Exception:
             return self._finish_failed(run_key, progress)
+
+    def _requested_scope(self, controls: Mapping[str, bool | int]) -> dict[str, bool | int | str]:
+        result: dict[str, bool | int | str] = dict(controls)
+        try:
+            context = getattr(self.source, "capture_context", None)
+        except Exception:
+            raise StorageError("source capture context is invalid") from None
+        if context is None:
+            return result
+        if not isinstance(context, Mapping):
+            raise StorageError("source capture context is invalid")
+        for key, value in context.items():
+            if key in result or not isinstance(key, str) or not isinstance(value, str):
+                raise StorageError("source capture context is invalid")
+            result[key] = value
+        return result
 
     def _known_assessment_ids(self, course: CourseId) -> tuple[ContentId, ...]:
         connection = self.domain.database.connect()

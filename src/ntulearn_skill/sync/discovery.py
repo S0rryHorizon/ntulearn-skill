@@ -23,6 +23,7 @@ from ntulearn_skill.client import (
     SourceProvider,
     SourceUnavailable,
     safe_source_error_category,
+    source_observed_at,
 )
 from ntulearn_skill.core import (
     AttachmentId,
@@ -32,7 +33,7 @@ from ntulearn_skill.core import (
     Coverage,
     SyncRunStatus,
 )
-from ntulearn_skill.core.models import to_storage_time, utc_now
+from ntulearn_skill.core.models import to_storage_time
 from ntulearn_skill.storage import DomainRepository, ResourceRepository
 from ntulearn_skill.sync.models import ScopeResult, SyncRunResult, SyncWarning
 from ntulearn_skill.sync.observability import SyncRunRecorder
@@ -318,6 +319,7 @@ class DiscoverySync:
                         title=item.title,
                         term=item.term,
                         availability=item.availability,
+                        observed_at=source_observed_at(self.source),
                     )
                     progress.items_seen = 1
                     progress.pagination_complete = True
@@ -379,6 +381,7 @@ class DiscoverySync:
                         title=item.title,
                         term=item.term,
                         availability=item.availability,
+                        observed_at=source_observed_at(self.source),
                     )
                     courses.append(item)
                     progress.items_seen += 1
@@ -468,6 +471,7 @@ class DiscoverySync:
                             position=item.position,
                             availability=item.availability,
                             sanitized_metadata=item.sanitized_metadata,
+                            observed_at=source_observed_at(self.source),
                         )
                         if observed_content is not None:
                             observed_content.append(item)
@@ -487,6 +491,7 @@ class DiscoverySync:
                                 candidate_modified_at=None
                                 if resource.candidate_modified_at is None
                                 else to_storage_time(resource.candidate_modified_at),
+                                observed_at=source_observed_at(self.source),
                             )
                             if observed_resources is not None:
                                 observed_resources.append(resource)
@@ -606,7 +611,7 @@ class DiscoverySync:
             pagination_complete=progress.pagination_complete,
             failure_category=progress.failure_category,
             warnings=tuple(progress.warnings),
-            observed_at=utc_now(),
+            observed_at=source_observed_at(self.source),
         )
 
     def _failed_scope(self, data_kind: str, course: CourseId | None, category: str) -> ScopeResult:
@@ -620,7 +625,7 @@ class DiscoverySync:
             pagination_complete=False,
             failure_category=category,
             warnings=(SyncWarning.SOURCE_FAILURE,),
-            observed_at=utc_now(),
+            observed_at=source_observed_at(self.source),
         )
 
     def _unsupported_scope(self, data_kind: str, course: CourseId | None) -> ScopeResult:
@@ -634,7 +639,7 @@ class DiscoverySync:
             pagination_complete=False,
             failure_category="unsupported_capability",
             warnings=(SyncWarning.PAGE_COVERAGE_UNKNOWN,),
-            observed_at=utc_now(),
+            observed_at=source_observed_at(self.source),
         )
 
     def _supported(self, capability: SourceCapability) -> bool:

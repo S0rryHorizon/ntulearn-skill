@@ -16,6 +16,7 @@ from ntulearn_skill.cli._presentation import (
     render_json,
     usage_error_envelope,
 )
+from ntulearn_skill.client import SourceError, safe_source_error_category
 from ntulearn_skill.core import Coverage, TemporalPrecision
 from ntulearn_skill.core.api import CoreService, CourseRef, ManualResolution, ResourceRef
 from ntulearn_skill.core.results import ErrorCategory, ResultEnvelope, SafeError
@@ -262,6 +263,17 @@ def _requested_json(argv: Sequence[str] | None) -> bool:
     return bool(argv is not None and "--json" in argv)
 
 
+def _needs_source(args: argparse.Namespace) -> bool:
+    if args.command in {"sync", "fetch"}:
+        return True
+    if not hasattr(args, "freshness"):
+        return False
+    return bool(
+        args.max_age_seconds is not None
+        or args.freshness not in {None, "cache-only", "allow-stale"}
+    )
+
+
 def _safe_command(argv: Sequence[str] | None) -> str | None:
     if argv is None:
         return None
@@ -306,7 +318,14 @@ def run(
         if service is None:
             from ntulearn_skill.core.api import CoreService
 
-            service = CoreService.from_runtime(getattr(args, "root", None))
+            capture = getattr(args, "browser_capture", None)
+            configure_capture = capture if _needs_source(args) else None
+            root = getattr(args, "root", None)
+            service = (
+                CoreService.from_runtime(root)
+                if configure_capture is None
+                else CoreService.from_runtime(root, browser_capture=configure_capture)
+            )
         result = _dispatch(args, service, now=now)
         payload = json_envelope(
             result,
@@ -322,6 +341,15 @@ def run(
         result = _failure_result(
             "cli.dispatch", ErrorCategory.INVALID_REQUEST, "CLI_INVALID_REQUEST"
         )
+        payload = json_envelope(result, command=command)
+    except SourceError as error:
+        category_name = safe_source_error_category(error.category)
+        category = {
+            "authentication_required": ErrorCategory.AUTHENTICATION_REQUIRED,
+            "session_expired": ErrorCategory.SESSION_EXPIRED,
+            "unsupported_capability": ErrorCategory.CAPABILITY_UNSUPPORTED,
+        }.get(category_name, ErrorCategory.SOURCE_UNAVAILABLE)
+        result = _failure_result("cli.dispatch", category, category_name)
         payload = json_envelope(result, command=command)
     except Exception:
         result = _failure_result(

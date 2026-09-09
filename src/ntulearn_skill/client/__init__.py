@@ -1,5 +1,10 @@
 """Authenticated, operation-guarded source-client boundary."""
 
+from ntulearn_skill.client.browser_capture import (
+    BrowserCaptureBundle,
+    BrowserCaptureProvider,
+    BrowserCaptureSessionProvider,
+)
 from ntulearn_skill.client.contracts import (
     AnnouncementSourceRecord,
     AssessmentSourceRecord,
@@ -31,6 +36,7 @@ from ntulearn_skill.client.contracts import (
     TimeWindow,
     UnsupportedCapability,
     safe_source_error_category,
+    source_observed_at,
 )
 from ntulearn_skill.client.ntulearn import NtulearnSourceAdapter
 from ntulearn_skill.client.transport import (
@@ -46,6 +52,9 @@ __all__ = [
     "AuthenticationRequired",
     "AssessmentSourceRecord",
     "AuthorizedReadSession",
+    "BrowserCaptureBundle",
+    "BrowserCaptureProvider",
+    "BrowserCaptureSessionProvider",
     "CapabilityState",
     "ContentSourceRecord",
     "CourseSourceRecord",
@@ -78,4 +87,5 @@ __all__ = [
     "UnsupportedCapability",
     "WireResponse",
     "safe_source_error_category",
+    "source_observed_at",
 ]

@@ -61,6 +61,7 @@ from ntulearn_skill.storage import (
     MigrationError,
     ResourceRecord,
     ResourceRepository,
+    ResourceStore,
     RuntimePaths,
     StorageError,
 )
@@ -348,14 +349,31 @@ class CoreService:
         root: str | Path | None = None,
         *,
         sync_engine: SyncEngine | None = None,
+        browser_capture: str | Path | None = None,
         initialize: bool = True,
     ) -> CoreService:
+        if sync_engine is not None and browser_capture is not None:
+            raise ValueError("runtime accepts only one source configuration")
         paths = RuntimePaths.discover(root)
         if initialize:
             paths.ensure()
         database = Database(paths.database)
         if initialize:
             DomainRepository(database).initialize()
+        if browser_capture is not None:
+            from ntulearn_skill.client import (
+                BrowserCaptureProvider,
+                BrowserCaptureSessionProvider,
+            )
+
+            source = BrowserCaptureProvider.from_manifest(browser_capture)
+            sessions = BrowserCaptureSessionProvider(source.bundle)
+            sync_engine = SyncEngine(
+                sessions,
+                source,
+                DomainRepository(database),
+                ResourceStore(paths, ResourceRepository(database)),
+            )
         return cls(database, runtime_paths=paths, sync_engine=sync_engine)
 
     def list_courses(

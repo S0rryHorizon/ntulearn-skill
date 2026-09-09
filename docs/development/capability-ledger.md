@@ -115,10 +115,25 @@ partial coverage. Floating dates use conservative bounds rather than an invented
 The Codex dispatcher is a Python integration surface, not an installed plugin or an
 LLM-backed agent. Semantic search and the ChatGPT integration remain deferred.
 
-## Phase 4 live gate recheck
+## Historical Phase 4 live gate recheck
 
 A fresh dedicated browser tab again reached the authenticated course UI. The same
 known read-only course API was blocked by the browser client. The tab was closed
 without changing account/course state. Current end-to-end live checks remain BLOCKED;
 this is not evidence that logging in again alone would resolve the transport limitation.
 Synthetic/runtime safety passed independently; no live capability is promoted by that result.
+
+## Browser-assisted follow-up
+
+The built-in browser capture provider and `--browser-capture` CLI entry use private
+observations and normal downloads collected through the connected browser host. The
+standalone CLI imports those observations; it does not perform browser login or prove
+raw API transport compatibility. See [the current diagnosis and evidence boundary](connection-followup.md).
+
+One newly collected course/PDF/announcement/assessment sample has passed preliminary
+normal CLI ingestion, local search, exact physical-page resolution, persisted-process
+retrieval and same-capture reuse checks. This bounded observation does not promote
+large-list pagination, all courses, all formats or the raw API translator to validated.
+The second fresh download is pending manual Mac unlock; integrated acceptance remains
+open. Private extraction evaluation and its remaining visual/context limits are recorded
+in the follow-up rather than inferred from synthetic parser success.
