@@ -34,6 +34,14 @@ SourceProvider
   open_resource_stream(session, resource: AttachmentId) -> EphemeralByteStream
 ```
 
+`AuthorizedReadSession.marker` identifies the current authorization context, not an individual
+purpose request. A provider must reuse the same marker object when `acquire` returns purpose-limited
+sessions backed by the same still-valid login, and must replace it when the authorization context
+changes. The raw API `NtulearnSourceAdapter` deliberately binds discovered course, content, and
+attachment IDs to that marker so evidence from one login or account cannot authorize a later read
+in another. It opts into source-context recovery for standalone resource reads; providers with a
+self-contained, separately validated capture context do not need that recovery.
+
 The concrete `NtulearnSourceAdapter` owns endpoint paths, response-shape translation, pagination,
 and ephemeral download routing. The core sees typed records and explicit coverage/capability data.
 Separate schedule and due-item methods preserve the confirmed distinction between these sources.

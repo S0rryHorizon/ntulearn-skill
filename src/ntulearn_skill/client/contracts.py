@@ -186,7 +186,9 @@ class AuthorizedReadSession:
     """Opaque marker owned by a session provider.
 
     Authentication material is deliberately not a field on this object. Concrete providers keep it
-    in their own private state keyed by the marker.
+    in their own private state keyed by the marker. The marker identifies one authorization
+    context, rather than one requested purpose: sessions acquired for different purposes in the
+    same valid context must carry the same marker object.
     """
 
     provider: str
@@ -215,6 +217,15 @@ class AuthorizedReadSession:
 
 
 class SessionProvider(Protocol):
+    """Supply purpose-limited views of one stable authorization context.
+
+    Repeated ``acquire`` calls for the same still-valid authorization context must return sessions
+    whose ``marker`` is the same object, including when ``purpose`` differs. A provider must change
+    the marker when it moves to a different authorization context (for example after re-login or
+    account switching). Source adapters use marker identity to prevent discoveries made under one
+    context from authorizing reads under another.
+    """
+
     def acquire(self, purpose: ReadPurpose) -> AuthorizedReadSession: ...
 
     def status(self) -> SessionStatus: ...
@@ -474,6 +485,11 @@ class EphemeralByteStream:
 class SourceProvider(Protocol):
     @property
     def provider_name(self) -> str: ...
+
+    @property
+    def requires_resource_context_refresh(self) -> bool:
+        """Whether standalone byte reads require fresh discovery-bound authorization context."""
+        ...
 
     def capabilities(self) -> SourceCapabilities: ...
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import BinaryIO, Literal, cast
@@ -51,6 +52,10 @@ FetchOutcome = Literal[
     "UNCHANGED_HASH_VERIFIED",
     "BINARY_CHANGED",
     "FAILED",
+]
+
+SourceContextRefresh = Callable[
+    [int, CourseId, ContentId, AttachmentId], ResourceMetadataRecord | None
 ]
 
 
@@ -110,6 +115,7 @@ class ResourceFetchService:
         jobs: LocalJobPlanner,
         *,
         verification_interval: timedelta = timedelta(days=7),
+        source_context_refresh: SourceContextRefresh | None = None,
     ) -> None:
         if verification_interval <= timedelta(0):
             raise ValueError("verification interval must be positive")
@@ -118,6 +124,7 @@ class ResourceFetchService:
         self.store = store
         self.jobs = jobs
         self.verification_interval = verification_interval
+        self._source_context_refresh = source_context_refresh
 
     def fetch(
         self,
@@ -127,6 +134,7 @@ class ResourceFetchService:
         content: ContentSourceRecord | ContentId | None = None,
         course: CourseSourceRecord | CourseId | None = None,
         verify: bool = False,
+        refresh_source_context: bool = False,
         observed_at: datetime | None = None,
     ) -> ResourceFetchResult:
         if sync_run_key <= 0:
@@ -194,6 +202,19 @@ class ResourceFetchService:
                 )
 
             previous_hash = None if current is None else current.sha256
+            if refresh_source_context:
+                if self._source_context_refresh is None:
+                    raise SourceProtocolError()
+                refreshed_metadata = self._source_context_refresh(
+                    sync_run_key,
+                    evidence.course_id,
+                    evidence.content_id,
+                    attachment_id,
+                )
+                if refreshed_metadata is not None:
+                    evidence = self._resolve_evidence(refreshed_metadata, content, course)
+                if observed_at is None:
+                    clock = utc_now()
             self.source.capabilities().require(SourceCapability.RESOURCE_STREAM)
             session = self._session(ReadPurpose.RESOURCE_STREAM)
             with self.source.open_resource_stream(session, attachment_id) as stream:

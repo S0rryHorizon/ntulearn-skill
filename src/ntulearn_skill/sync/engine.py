@@ -9,14 +9,21 @@ from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 
 from ntulearn_skill.client import (
+    AuthenticationRequired,
     CapabilityState,
     ContentSourceRecord,
     CourseSourceRecord,
     PageRequest,
+    PaginationCycle,
+    PaginationLimitReached,
     ResourceMetadataRecord,
+    SessionExpired,
     SessionProvider,
+    SourceAccessDenied,
     SourceCapability,
+    SourceProtocolError,
     SourceProvider,
+    SourceUnavailable,
     TimeWindow,
 )
 from ntulearn_skill.core import AttachmentId, Availability, ContentId, CourseId, Coverage
@@ -44,6 +51,10 @@ from ntulearn_skill.sync.models import ScopeResult, SyncRunResult, SyncWarning
 from ntulearn_skill.sync.observability import SyncRunRecorder
 from ntulearn_skill.sync.resources import ResourceFetchResult, ResourceFetchService
 from ntulearn_skill.sync.state import ScopeKey, SyncAttemptOutcome, SyncStateRepository
+
+_RESOURCE_CONTEXT_PAGE_SIZE = 100
+_RESOURCE_CONTEXT_MAX_PAGES = 100
+_RESOURCE_CONTEXT_MAX_NODES = 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +148,7 @@ class SyncEngine:
             store,
             planner,
             verification_interval=verification_interval,
+            source_context_refresh=self._refresh_resource_source_context,
         )
         self.state = SyncStateRepository(database)
         self.lifecycle = ResourceInventoryReconciler(database)
@@ -306,7 +318,12 @@ class SyncEngine:
         )
         progress = _RunProgress()
         try:
-            result = self.resources.fetch(resource, sync_run_key=run_key, verify=verify)
+            result = self.resources.fetch(
+                resource,
+                sync_run_key=run_key,
+                verify=verify,
+                refresh_source_context=True,
+            )
             failed = result.fetch_decision is FetchDecision.FAILED
             progress.resources_fetched = 0 if failed else 1
             progress.resources_failed = 1 if failed else 0
@@ -632,6 +649,66 @@ class SyncEngine:
                 utc_now(),
             )
         )
+
+    def _refresh_resource_source_context(
+        self,
+        run_key: int,
+        course: CourseId,
+        content: ContentId,
+        resource: AttachmentId,
+    ) -> ResourceMetadataRecord | None:
+        """Rebuild ephemeral adapter authorization before a standalone byte read."""
+
+        if getattr(self.source, "requires_resource_context_refresh", False) is not True:
+            return None
+        capabilities = self.source.capabilities()
+        if (
+            capabilities.state(SourceCapability.COURSE_DISCOVERY)
+            is not CapabilityState.SUPPORTED
+            or capabilities.state(SourceCapability.CONTENT_TREE) is not CapabilityState.SUPPORTED
+        ):
+            return None
+        discovery = self.discovery.sync_course(
+            run_key,
+            course,
+            include_availability=True,
+            include_content=True,
+            page_size=_RESOURCE_CONTEXT_PAGE_SIZE,
+            max_pages_per_scope=_RESOURCE_CONTEXT_MAX_PAGES,
+            max_content_nodes=_RESOURCE_CONTEXT_MAX_NODES,
+        )
+        incomplete = next(
+            (
+                scope
+                for scope in discovery.scopes
+                if scope.coverage is not Coverage.COMPLETE or not scope.pagination_complete
+            ),
+            None,
+        )
+        if incomplete is not None:
+            self._raise_resource_context_failure(incomplete.failure_category)
+        matches = tuple(item for item in discovery.resources if item.remote_id == resource)
+        if len(matches) > 1 or (matches and matches[0].content_id != content):
+            raise SourceProtocolError()
+        if matches:
+            return matches[0]
+        raise SourceAccessDenied()
+
+    @staticmethod
+    def _raise_resource_context_failure(category: str | None) -> None:
+        if category == AuthenticationRequired.category:
+            raise AuthenticationRequired()
+        if category == SessionExpired.category:
+            raise SessionExpired()
+        if category == SourceAccessDenied.category or category == "course_not_observed":
+            raise SourceAccessDenied()
+        if category == SourceProtocolError.category:
+            raise SourceProtocolError()
+        if category == PaginationLimitReached.category:
+            raise PaginationLimitReached()
+        if category == PaginationCycle.category:
+            raise PaginationCycle()
+        raise SourceUnavailable()
 
     def _add_jobs(
         self, progress: _RunProgress, course: CourseId | None, result: LocalJobRunResult

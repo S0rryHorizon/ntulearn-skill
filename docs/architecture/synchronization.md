@@ -74,7 +74,13 @@ institutional or historical course.
 
 Acquires a fresh ephemeral download route through the source adapter, downloads and hashes one
 resource, creates/reuses a verified version, then schedules downstream local jobs. It can be invoked
-by a sync policy or explicitly by the user.
+by a sync policy or explicitly by the user. For a provider that declares its resource routes
+discovery-bound, an explicit standalone fetch that needs source bytes first performs bounded
+course/content rediscovery in the same authorization context and
+requires the target attachment to be observed again. This reconstructs the adapter's in-memory
+authorization graph after restart without treating persisted IDs as current authorization. If that
+rediscovery is incomplete or fails, the fetch fails with a typed safe category and retains every
+previously verified local version.
 
 Provider-native delta sync, conditional requests, and stable remote validators are optional future
 capabilities. The planner uses them only after live validation marks the capability supported.

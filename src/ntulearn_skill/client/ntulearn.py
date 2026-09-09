@@ -125,6 +125,10 @@ class NtulearnSourceAdapter:
     def provider_name(self) -> str:
         return self._provider_name
 
+    @property
+    def requires_resource_context_refresh(self) -> bool:
+        return True
+
     def capabilities(self) -> SourceCapabilities:
         supported = {
             SourceCapability.COURSE_DISCOVERY,
