@@ -15,7 +15,14 @@ secrets.json
 /downloads/
 /cache/
 /data/
+/db/
 /courses/
+/objects/
+/indexes/
+/auth/
+/logs/
+/exports/
+/tmp/
 /recon/
 /request-dumps/
 *.har

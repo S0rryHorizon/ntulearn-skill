@@ -28,11 +28,14 @@ Store private data preferably under:
 ~/.ntulearn-skill/
 ├── config/
 ├── auth/
-├── database/
+├── db/
+├── objects/
+├── courses/
 ├── indexes/
 ├── cache/
 ├── logs/
-└── courses/
+├── exports/
+└── tmp/
 ```
 
 During development, private artifacts may instead use the ignored `.local/` tree:
@@ -54,6 +57,7 @@ During development, private artifacts may instead use the ignored `.local/` tree
 - Real course attachments, lecturer slides, lecture notes, assignment briefs, tutorials, or lab manuals.
 - Raw authenticated network captures, request dumps, or logs containing sensitive headers.
 - Download caches or any other artifact derived from private NTULearn access unless it has been deliberately transformed into a demonstrably synthetic fixture.
+- Signed/preview download URLs, including their query parameters, even when they appear short-lived.
 
 The `.gitignore` provides a baseline safety net, but it cannot recognize every sensitive filename. Contributors and agents must inspect staged content before every commit.
 

@@ -2,7 +2,9 @@
 
 Local-first NTULearn course synchronization, indexing and retrieval for AI agents.
 
-> **Status: Early development / experimental.** The repository currently contains only the Phase 0 project skeleton. It does not connect to NTULearn or provide synchronization, indexing, or retrieval yet.
+> **Status: Architecture complete / implementation not started.** Phase 2 defines the evidence-bound
+> architecture and Phase 3 vertical slices. The repository does not yet provide synchronization,
+> indexing, retrieval, or a working NTULearn connection.
 
 ## Motivation
 
@@ -27,7 +29,8 @@ These capabilities are plans, not current functionality.
 - Incremental synchronization and provenance-aware results.
 - Privacy by default, with private data kept outside Git.
 
-See [the architecture overview](docs/architecture/overview.md) for the initial boundaries.
+See [the architecture overview](docs/architecture/overview.md) for the system design, evidence
+boundary, and detailed architecture documents.
 
 ## Privacy
 
@@ -37,10 +40,10 @@ See [data boundaries](docs/privacy/data-boundaries.md) before adding fixtures, l
 
 ## Development roadmap
 
-1. Phase 0 — Repository Bootstrap (current)
-2. Phase 1 — NTULearn Reconnaissance
-3. Phase 2 — Architecture Design
-4. Phase 3 — Implementation
+1. Phase 0 — Repository Bootstrap (complete)
+2. Phase 1 — NTULearn Reconnaissance (complete with documented limitations; private evidence)
+3. Phase 2 — Architecture Design (complete)
+4. Phase 3 — Implementation (next; not started)
 5. Phase 4 — Validation
 6. Phase 5 — Open-source Hardening
 

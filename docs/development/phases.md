@@ -4,19 +4,27 @@
 
 Create the public project skeleton, privacy boundary, minimal packaging, documentation entry points, local-only workspace convention, and clean initial commit.
 
-**Current scope:** Phase 0 only.
+**Status:** Complete.
 
 ## Phase 1 — NTULearn Reconnaissance
 
 With explicit authorization, observe only the minimum read-only behavior needed to understand supported synchronization. Label findings as `CONFIRMED`, `OBSERVED`, `HYPOTHESIS`, or `UNKNOWN`. Store raw requests, real metadata, internal identifiers, and download samples only in `.local/recon/`. Move only reviewed and de-identified conclusions into `docs/development/`.
 
+**Status:** Complete with documented limitations. Raw evidence remains private and ignored.
+
 ## Phase 2 — Architecture Design
 
 Turn confirmed reconnaissance into domain models, data flows, storage and provenance schemas, synchronization rules, security controls, and architectural decisions. Do not design around unverified platform assumptions.
 
+**Status:** Complete. See `docs/architecture/` and `docs/decisions/`. No product functionality was
+implemented in this phase.
+
 ## Phase 3 — Implementation
 
 Implement the smallest validated vertical slices, preserving a standalone core and CLI with optional thin AI adapters.
+
+**Status:** Next; not started. The milestone order and acceptance criteria are defined in
+`docs/architecture/testing-and-implementation.md`.
 
 ## Phase 4 — Validation
 
