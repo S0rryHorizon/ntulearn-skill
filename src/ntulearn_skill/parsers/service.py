@@ -26,7 +26,7 @@ from ntulearn_skill.parsers.models import (
     SelectiveFallback,
 )
 from ntulearn_skill.parsers.registry import ParserRegistry
-from ntulearn_skill.parsers.repository import ParseRepository, ParseStorageError
+from ntulearn_skill.parsers.repository import ParseRepository, ParseStorageError, StoredParse
 from ntulearn_skill.storage.paths import RuntimePaths
 from ntulearn_skill.storage.resources import ResourceRepository, ResourceVersionRecord
 
@@ -157,6 +157,21 @@ class ParseService:
             except (ParseStorageError, TypeError, ValueError):
                 raise ParseOperationError("selective fallback result could not be stored") from None
         return tuple(stored)
+
+    def resolve_verified_parse(
+        self, parse_key: int
+    ) -> tuple[StoredParse, ResourceVersionRecord, Path]:
+        """Resolve a parse to hash-verified immutable bytes for a local adapter."""
+
+        if isinstance(parse_key, bool) or parse_key <= 0:
+            raise ValueError("parse key must be positive")
+        parsed = self.repository.get(parse_key)
+        if parsed is None:
+            raise ParseOperationError("parsed document was not found")
+        version = self.resources.get_version(parsed.document.version_key)
+        if version is None or version.sha256 != parsed.document.resource_sha256:
+            raise ParseOperationError("parsed document evidence is unavailable")
+        return parsed, version, self._verified_blob(version)
 
     def _validate_fallback_output(self, output: FallbackOutput) -> None:
         if output.text is not None and len(output.text) > 2 * 1024 * 1024:

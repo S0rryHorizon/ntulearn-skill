@@ -85,7 +85,7 @@ def _visual_diagnostic(text: str, visual_count: int, options: ParserOptions) -> 
     if visual_count:
         reasons.append("embedded_visual_present")
     return ChunkDiagnostic(
-        detector_version="stage-b-1",
+        detector_version=options.diagnostic_version,
         native_character_count=len(text),
         content_stream_bytes=None,
         image_count=visual_count,

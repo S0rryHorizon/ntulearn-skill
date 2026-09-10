@@ -41,12 +41,14 @@ from ntulearn_skill.core.results import (
 from ntulearn_skill.events import (
     CandidateFieldName,
     CanonicalEvent,
+    DeterministicEventExtractor,
     EventReconciler,
     EventResolutionState,
     EventType,
     ManualFieldResolution,
     ManualIdentityResolution,
 )
+from ntulearn_skill.index import SearchIndex
 from ntulearn_skill.search import (
     SearchEntityKind,
     SearchFilters,
@@ -343,6 +345,7 @@ class ResourceView:
     file_format: str | None
     declared_mime: str | None
     downloaded_at: datetime | None
+    parse_key: int | None = None
     local_path: Path | None = None
 
 
@@ -846,6 +849,7 @@ class CoreService:
                 None if selected is None else selected.file_format,
                 None if selected is None else selected.declared_mime,
                 None if selected is None else selected.downloaded_at,
+                None if selected is None else self._latest_parse_key(selected.key),
                 local_path,
             )
             return ResultEnvelope(
@@ -864,6 +868,93 @@ class CoreService:
             )
         except Exception as error:
             return self._failure(operation, error, "resource")
+
+    def prepare_visual_evidence(self, parse_key: int, *, dpi: int = 150) -> ResultEnvelope[object]:
+        """Render only parser-flagged PDF pages into the private derived cache."""
+
+        operation = "prepare_visual_evidence"
+        try:
+            parse_coverage = self._visual_parse_coverage(parse_key)
+            service = self._visual_evidence_service()
+            items = service.prepare(parse_key, dpi=dpi)
+            warnings = tuple(
+                item
+                for item in (
+                    SafeWarning(
+                        "visual_evidence_needs_review",
+                        "Flagged rendered pages require bounded host inspection.",
+                        f"parse:{parse_key}",
+                    )
+                    if items
+                    else None,
+                    SafeWarning(
+                        "visual_source_parse_partial",
+                        "The source parse remains partial after selective visual preparation.",
+                        f"parse:{parse_key}",
+                    )
+                    if parse_coverage is not Coverage.COMPLETE
+                    else None,
+                )
+                if item is not None
+            )
+            return ResultEnvelope(
+                operation,
+                cast(tuple[object, ...], items),
+                warnings=warnings,
+                completeness=(
+                    Coverage.PARTIAL
+                    if items or parse_coverage is not Coverage.COMPLETE
+                    else Coverage.COMPLETE
+                ),
+            )
+        except Exception as error:
+            return self._failure(operation, error, "visual_evidence")
+
+    def import_visual_evidence(self, bundle_path: str | Path) -> ResultEnvelope[object]:
+        """Import a private host result bundle without weakening its review state."""
+
+        operation = "import_visual_evidence"
+        try:
+            items = self._visual_evidence_service().import_bundle(bundle_path)
+            projection_warning: tuple[SafeWarning, ...] = ()
+            try:
+                for parse_key in sorted({item.parse_key for item in items}):
+                    version_key, course = self._visual_projection_source(parse_key)
+                    DeterministicEventExtractor(self.database).extract_resource_version(
+                        version_key, parse_key=parse_key
+                    )
+                    self.events.reconcile_course(course)
+                SearchIndex(self.database).rebuild()
+            except Exception:
+                projection_warning = (
+                    SafeWarning(
+                        "visual_projection_pending",
+                        "Visual evidence was imported; rerun import to retry its projection.",
+                        f"parse:{items[0].parse_key}",
+                    ),
+                )
+            statuses = {item.review_status.value for item in items}
+            warnings = (
+                tuple(
+                    SafeWarning(
+                        "visual_evidence_partial"
+                        if status == "PARTIAL"
+                        else "visual_evidence_needs_review",
+                        "Imported visual evidence remains incomplete or requires review.",
+                        f"parse:{items[0].parse_key}",
+                    )
+                    for status in sorted(statuses)
+                )
+                + projection_warning
+            )
+            return ResultEnvelope(
+                operation,
+                cast(tuple[object, ...], items),
+                warnings=warnings,
+                completeness=Coverage.PARTIAL,
+            )
+        except Exception as error:
+            return self._failure(operation, error, "visual_evidence")
 
     def resolve_source(
         self, locator: SourceLocatorRef, context_window: int = 1
@@ -1895,6 +1986,78 @@ class CoreService:
             if row is None:
                 raise LookupError("local resource was not found")
             return int(row["source_object_key"])
+        finally:
+            connection.close()
+
+    def _latest_parse_key(self, version_key: int) -> int | None:
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """SELECT parse_key FROM parsed_document
+                WHERE version_key = ? AND status <> 'FAILED'
+                ORDER BY parse_key DESC LIMIT 1""",
+                (version_key,),
+            ).fetchone()
+            return None if row is None else int(row["parse_key"])
+        finally:
+            connection.close()
+
+    def _visual_evidence_service(self) -> Any:
+        if self.runtime_paths is None:
+            raise ValueError("runtime paths are required for visual evidence")
+        from ntulearn_skill.parsers import ParserRegistry
+        from ntulearn_skill.parsers.repository import ParseRepository
+        from ntulearn_skill.parsers.service import ParseService
+        from ntulearn_skill.parsers.visual import VisualEvidenceService
+
+        repository = ParseRepository(self.database)
+        parser = ParseService(
+            self.runtime_paths,
+            self.resources,
+            repository,
+            ParserRegistry(),
+        )
+        return VisualEvidenceService(self.runtime_paths, parser, repository)
+
+    def _visual_parse_coverage(self, parse_key: int) -> Coverage:
+        if isinstance(parse_key, bool) or not isinstance(parse_key, int) or parse_key <= 0:
+            raise ValueError("parse key must be positive")
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                "SELECT coverage FROM parsed_document WHERE parse_key = ?", (parse_key,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("parsed document was not found")
+            return Coverage(str(row["coverage"]))
+        finally:
+            connection.close()
+
+    def _visual_projection_source(self, parse_key: int) -> tuple[int, CourseId]:
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT version.version_key, provider.name AS provider,
+                       course_object.remote_key AS course_remote
+                FROM parsed_document parsed
+                JOIN resource_version version ON version.version_key = parsed.version_key
+                JOIN resource ON resource.resource_key = version.resource_key
+                JOIN content_node content ON content.content_key = resource.content_key
+                JOIN course ON course.course_key = content.course_key
+                JOIN source_object course_object
+                  ON course_object.source_object_key = course.source_object_key
+                JOIN source_provider provider
+                  ON provider.provider_key = course_object.provider_key
+                WHERE parsed.parse_key = ?
+                """,
+                (parse_key,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("visual evidence source course is unavailable")
+            return int(row["version_key"]), CourseId(
+                str(row["provider"]), str(row["course_remote"])
+            )
         finally:
             connection.close()
 

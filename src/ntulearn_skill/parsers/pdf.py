@@ -31,6 +31,19 @@ _PYPDF_LOGGER.addHandler(logging.NullHandler())
 _PYPDF_LOGGER.propagate = False
 
 _DRAWING_OPERATOR = re.compile(rb"(?:^|\s)(?:m|l|c|v|y|h|re|S|s|f|F|f\*|B|B\*|b|b\*|n)(?=\s|$)")
+_VISUAL_DATE_REFERENCE = re.compile(
+    r"\b(?:"
+    r"(?:mentioned|following|shown|listed)\s+(?:due\s+)?dates?"
+    r"|due\s+dates?\s+(?:below|above|shown|listed)"
+    r"|(?:see|refer\s+to)\s+(?:the\s+)?(?:table|figure|image|schedule)"
+    r")\b",
+    re.I,
+)
+_EVENTISH_VISUAL_CONTEXT = re.compile(
+    r"\b(?:assignment|homework|quiz|test|exam(?:ination)?|presentation|tutorial|"
+    r"lab(?:oratory)?|deadline|due|week|schedule)\b",
+    re.I,
+)
 
 
 def _resolved(value: Any) -> Any:
@@ -213,6 +226,21 @@ class PdfParser:
                 reasons.append("xobject_inspection_incomplete")
             if drawing_count >= options.drawing_operator_threshold:
                 reasons.append("drawing_operators_dominate")
+            visual_date_reference = (
+                options.diagnostic_version == "stage-b-2"
+                and _VISUAL_DATE_REFERENCE.search(native_text) is not None
+            )
+            if visual_date_reference:
+                reasons.append("native_text_references_visual_dates")
+            dense_visual_layout = (
+                options.diagnostic_version == "stage-b-2"
+                and drawing_count >= options.drawing_operator_threshold
+                and drawing_count >= 500
+                and drawing_count >= max(1, len(native_text.strip())) * 2
+                and _EVENTISH_VISUAL_CONTEXT.search(native_text) is not None
+            )
+            if dense_visual_layout:
+                reasons.append("dense_visual_layout_with_limited_text")
             if extraction_failed:
                 reasons.append("native_extraction_failed")
             if stream_limited:
@@ -223,12 +251,15 @@ class PdfParser:
                 or form_count > 0
                 or drawing_count >= options.drawing_operator_threshold
             )
-            fallback_recommended = extraction_failed or (low_text and supporting_visual_signal)
+            fallback_recommended = extraction_failed or (
+                supporting_visual_signal
+                and (low_text or visual_date_reference or dense_visual_layout)
+            )
             if fallback_recommended:
                 partial = True
                 warning_codes.add("visual_evidence_requires_fallback")
             diagnostic = ChunkDiagnostic(
-                detector_version="stage-b-1",
+                detector_version=options.diagnostic_version,
                 native_character_count=len(native_text),
                 content_stream_bytes=stream_size,
                 image_count=image_count,

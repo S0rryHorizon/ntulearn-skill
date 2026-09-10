@@ -21,11 +21,22 @@ from ntulearn_skill.parsers.models import (
     ParseStatus,
     RepresentationKind,
     SelectiveFallback,
+    VisualEvidenceMetadata,
+    VisualEvidenceRecord,
+    VisualReviewStatus,
 )
 from ntulearn_skill.parsers.pdf import PdfParser
 from ntulearn_skill.parsers.registry import ParserRegistry
 from ntulearn_skill.parsers.repository import ParseRepository, ParseStorageError
 from ntulearn_skill.parsers.service import ParseOperationError, ParseService
+from ntulearn_skill.parsers.visual import (
+    PageRenderer,
+    PdftoppmRenderer,
+    VisualEvidenceError,
+    VisualEvidenceService,
+    VisualImportItem,
+    VisualInspectionItem,
+)
 
 __all__ = [
     "ChunkDiagnostic",
@@ -54,4 +65,13 @@ __all__ = [
     "PdfParser",
     "RepresentationKind",
     "SelectiveFallback",
+    "PageRenderer",
+    "PdftoppmRenderer",
+    "VisualEvidenceError",
+    "VisualEvidenceMetadata",
+    "VisualEvidenceRecord",
+    "VisualEvidenceService",
+    "VisualImportItem",
+    "VisualInspectionItem",
+    "VisualReviewStatus",
 ]

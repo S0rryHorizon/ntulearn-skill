@@ -645,7 +645,11 @@ def test_runner_rejects_parser_drift_and_a_new_planner_replans(tmp_path: Path) -
 
 def test_planned_parser_options_are_executed_from_the_durable_spec(tmp_path: Path) -> None:
     harness = _harness(tmp_path, [_pdf("Invented parser settings")])
-    options = ParserOptions(low_text_character_threshold=7, drawing_operator_threshold=19)
+    options = ParserOptions(
+        low_text_character_threshold=7,
+        drawing_operator_threshold=19,
+        diagnostic_version="stage-b-1",
+    )
     planner = LocalJobPlanner(
         harness.queue,
         harness.runner.parse_service,

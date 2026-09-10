@@ -81,7 +81,7 @@ def _database(tmp_path: Path) -> tuple[Database, RuntimePaths, DomainRepository]
     paths = RuntimePaths(tmp_path / "private-synthetic")
     database = Database(paths.database)
     domain = DomainRepository(database)
-    assert domain.initialize() == 9
+    assert domain.initialize() == 10
     return database, paths, domain
 
 

@@ -463,7 +463,7 @@ def test_multiline_announcement_associates_date_time_and_venue_without_guessing_
 
     result = harness.extractor.extract_observation(observed.observation.key)
 
-    assert result.extractor_version == "4"
+    assert result.extractor_version == "5"
     assert len(result.candidates) == 1
     candidate = result.candidates[0]
     start = candidate.field(CandidateFieldName.START_TIME)

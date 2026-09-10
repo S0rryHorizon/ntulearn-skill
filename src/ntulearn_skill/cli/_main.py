@@ -46,6 +46,7 @@ _KNOWN_COMMANDS = frozenset(
         "manualresolution",
         "sync",
         "fetch",
+        "visual",
     }
 )
 
@@ -239,6 +240,10 @@ def _dispatch(
         return service.sync_all(policy)
     if command == "fetch":
         return service.fetch_resource(_resource(args.resource_key), args.verify)
+    if command == "visual":
+        if args.visual_action == "prepare":
+            return service.prepare_visual_evidence(args.parse_key, dpi=args.dpi)
+        return service.import_visual_evidence(args.bundle_path)
     raise UsageError("invalid command arguments")
 
 

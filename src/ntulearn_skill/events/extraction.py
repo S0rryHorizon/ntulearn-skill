@@ -6,8 +6,8 @@ import hashlib
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta, timezone
 
 from ntulearn_skill.core import CourseId, TemporalPrecision
 from ntulearn_skill.core.models import to_storage_time, utc_now
@@ -33,6 +33,7 @@ _SETTINGS = {
     "context_maximum_segments": 6,
     "maximum_candidates": 1000,
     "maximum_mentions_per_chunk": 100,
+    "rule_revision": 5,
 }
 _SETTINGS_JSON = json.dumps(_SETTINGS, sort_keys=True, separators=(",", ":"))
 _SETTINGS_HASH = hashlib.sha256(_SETTINGS_JSON.encode("utf-8")).hexdigest()
@@ -46,25 +47,29 @@ _WEEKDAY = (
 )
 _DAY = r"\d{1,2}(?:st|nd|rd|th)?"
 _HUMAN_DATE = rf"(?:(?:{_WEEKDAY})\s*,?\s*)?(?:{_DAY}\s+{_MONTH}|{_MONTH}\s+{_DAY}),?\s+\d{{4}}"
-_DATE_TOKEN = rf"(?:\d{{4}}-\d{{2}}-\d{{2}}|{_HUMAN_DATE})"
-_ZONE = r"(?:[+-]\d{2}:\d{2}|SGT|UTC|Z)"
+_SLASH_DATE = r"(?:0?[1-9]|[12]\d|3[01])/(?:0?[1-9]|[12]\d|3[01])/\d{2,4}"
+_DATE_TOKEN = rf"(?:\d{{4}}-\d{{2}}-\d{{2}}|{_HUMAN_DATE}|{_SLASH_DATE})"
+_ZONE = r"(?:[+-]\d{2}:\d{2}|SGT|UTC(?:[+-]\d{1,2})?|Z)"
+_ZONE_WRAPPED = rf"\(?{_ZONE}\)?"
+_CLOCK = r"(?:[01]?\d|2[0-3])[:.]\d{2}(?:\s*(?:a\.?m\.?|p\.?m\.?))?"
 _TEMPORAL_PATTERN = re.compile(
     rf"\b(?:"
     rf"\d{{4}}-\d{{2}}-\d{{2}}[T ]\d{{1,2}}:\d{{2}}(?::\d{{2}})?"
     rf"(?:Z|\s?(?:[+-]\d{{2}}:\d{{2}}|SGT|UTC))"
-    rf"|{_HUMAN_DATE}\s+(?:at\s+)?\d{{1,2}}[:.]\d{{2}}(?:\s?{_ZONE})"
+    rf"|{_DATE_TOKEN},?\s+(?:at\s+)?{_CLOCK}(?:\s?{_ZONE_WRAPPED})"
     rf"|{_DATE_TOKEN}"
     rf"|Week\s+\d{{1,2}}"
-    rf")\b",
+    rf")(?!\w)",
     flags=re.IGNORECASE,
 )
 _DATE_PATTERN = re.compile(rf"\b{_DATE_TOKEN}\b", re.I)
-_CLOCK = r"(?:[01]?\d|2[0-3])[:.]\d{2}(?:\s*(?:a\.?m\.?|p\.?m\.?))?"
+_SLASH_DATE_PATTERN = re.compile(rf"\b{_SLASH_DATE}\b")
 _TIME_RANGE_PATTERN = re.compile(
-    rf"\b(?P<start>{_CLOCK})\s*(?:to|until|[-–—])\s*(?P<end>{_CLOCK})(?:\s*(?P<zone>{_ZONE}))?\b",
+    rf"\b(?P<start>{_CLOCK})\s*(?:to|until|[-–—])\s*(?P<end>{_CLOCK})"
+    rf"(?:\s*(?P<zone>{_ZONE_WRAPPED}))?(?!\w)",
     re.I,
 )
-_TIME_PATTERN = re.compile(rf"\b(?P<clock>{_CLOCK})(?:\s*(?P<zone>{_ZONE}))?\b", re.I)
+_TIME_PATTERN = re.compile(rf"\b(?P<clock>{_CLOCK})(?:\s*(?P<zone>{_ZONE_WRAPPED}))?(?!\w)", re.I)
 _SPLIT = re.compile(
     r"(?:\r?\n)+|;\s*|(?<=[.!?])\s+|"
     r",\s*(?=(?:Assignment|Homework|Quiz|Test|Exam|Presentation|Tutorial|Lab|Lecture)\b)",
@@ -111,6 +116,7 @@ _ORDINAL_ONLY_PATTERN = re.compile(
     rf"^\s*(?:[-*•]\s*)?(?:{_ORDINAL}|\d{{1,2}}(?:st|nd|rd|th)|\d{{1,2}}[.)])\s*$",
     re.I,
 )
+_ROW_BOUNDARY_PATTERN = re.compile(r"^\s*(?:[-*•]\s*)?\d{1,2}(?:st|nd|rd|th|[.)])?\s*$", re.I)
 _EVENT_TARGET = (
     rf"(?:the\s+)?(?:{_ORDINAL}\s+)?"
     r"(?:assignment|homework|quiz|term\s+test|midterm|test|exam(?:ination)?|"
@@ -190,7 +196,7 @@ class DeterministicEventExtractor:
     """Extract reproducible candidates from structured observations or immutable chunks."""
 
     name = "deterministic-event-rules"
-    version = "4"
+    version = "5"
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -223,7 +229,14 @@ class DeterministicEventExtractor:
                 ).fetchone()
                 if source is None:
                     raise ValueError("source observation does not exist")
-                cached = self._cached(connection, "source_observation", observation_key, None, None)
+                cached = self._cached(
+                    connection,
+                    "source_observation",
+                    observation_key,
+                    None,
+                    None,
+                    str(source["observation_hash"]),
+                )
                 if cached is not None:
                     return self._result(connection, cached, cache_hit=True)
                 snapshot = json.loads(str(source["snapshot_json"]))
@@ -284,7 +297,7 @@ class DeterministicEventExtractor:
                         """
                         SELECT * FROM parsed_document parsed
                         WHERE parsed.version_key = ?
-                          AND parsed.status IN ('COMPLETE', 'PARTIAL')
+                          AND parsed.status IN ('COMPLETE', 'PARTIAL', 'UNSUPPORTED')
                         ORDER BY parsed.parsed_at DESC, parsed.parse_key DESC LIMIT 1
                         """,
                         (version_key,),
@@ -294,21 +307,16 @@ class DeterministicEventExtractor:
                         """
                         SELECT * FROM parsed_document parsed
                         WHERE parsed.parse_key = ? AND parsed.version_key = ?
-                          AND parsed.status IN ('COMPLETE', 'PARTIAL')
+                          AND parsed.status IN ('COMPLETE', 'PARTIAL', 'UNSUPPORTED')
                         """,
                         (parse_key, version_key),
                     ).fetchone()
                 if parsed is None:
                     raise ValueError("resource version has no reusable parse")
                 selected_parse_key = int(parsed["parse_key"])
-                cached = self._cached(
-                    connection, "resource_version", None, version_key, selected_parse_key
-                )
-                if cached is not None:
-                    return self._result(connection, cached, cache_hit=True)
                 chunks = connection.execute(
                     """
-                    SELECT chunk.native_text, chunk.diagnostic_json,
+                    SELECT chunk.chunk_key, chunk.native_text, chunk.diagnostic_json,
                            locator.locator_key, parsed.coverage
                     FROM document_chunk chunk
                     JOIN source_locator locator ON locator.chunk_key = chunk.chunk_key
@@ -317,8 +325,56 @@ class DeterministicEventExtractor:
                     """,
                     (selected_parse_key,),
                 ).fetchall()
+                representations = connection.execute(
+                    """
+                    SELECT representation.representation_key, representation.chunk_key,
+                           representation.text, representation.settings_hash,
+                           representation.confidence, metadata.review_status,
+                           metadata.rendered_sha256
+                    FROM chunk_representation representation
+                    JOIN visual_evidence_metadata metadata USING(representation_key)
+                    JOIN document_chunk chunk ON chunk.chunk_key = representation.chunk_key
+                    WHERE chunk.parse_key = ?
+                      AND representation.representation_kind = 'vision_description'
+                      AND representation.text IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM chunk_representation newer
+                          JOIN visual_evidence_metadata newer_metadata
+                            USING(representation_key)
+                          WHERE newer.chunk_key = representation.chunk_key
+                            AND newer.representation_kind = 'vision_description'
+                            AND newer.method = representation.method
+                            AND newer_metadata.version_key = metadata.version_key
+                            AND newer_metadata.source_page_index
+                              = metadata.source_page_index
+                            AND newer.representation_key
+                              > representation.representation_key
+                      )
+                    ORDER BY representation.representation_key
+                    """,
+                    (selected_parse_key,),
+                ).fetchall()
+                input_hash = self._parse_input_hash(str(version["sha256"]), parsed, representations)
+                cached = self._cached(
+                    connection,
+                    "resource_version",
+                    None,
+                    version_key,
+                    selected_parse_key,
+                    input_hash,
+                )
+                if cached is not None:
+                    return self._result(connection, cached, cache_hit=True)
+                visual_by_chunk: dict[int, list[sqlite3.Row]] = {}
+                for representation in representations:
+                    visual_by_chunk.setdefault(int(representation["chunk_key"]), []).append(
+                        representation
+                    )
                 drafts: list[_CandidateDraft] = []
-                warnings: list[str] = []
+                warnings: list[str] = (
+                    ["parse_unsupported"] if str(parsed["status"]) == "UNSUPPORTED" else []
+                )
                 for chunk in chunks:
                     chunk_drafts = self._text_drafts(
                         str(chunk["native_text"]), int(chunk["locator_key"])
@@ -327,10 +383,27 @@ class DeterministicEventExtractor:
                         chunk_drafts = chunk_drafts[: _SETTINGS["maximum_mentions_per_chunk"]]
                         warnings.append("chunk_candidate_limit_reached")
                     drafts.extend(chunk_drafts)
+                    visual_rows = visual_by_chunk.get(int(chunk["chunk_key"]), [])
+                    for visual in visual_rows:
+                        visual_drafts = self._text_drafts(
+                            str(visual["text"]),
+                            int(chunk["locator_key"]),
+                            source_path_prefix=f"representation.{int(visual['representation_key'])}",
+                        )
+                        stored_confidence = visual["confidence"]
+                        confidence = 0.5 if stored_confidence is None else float(stored_confidence)
+                        drafts.extend(
+                            replace(draft, confidence=min(draft.confidence, confidence))
+                            for draft in visual_drafts[: _SETTINGS["maximum_mentions_per_chunk"]]
+                        )
+                        if str(visual["review_status"]) == "PARTIAL":
+                            warnings.append("visual_evidence_partial")
+                        else:
+                            warnings.append("visual_evidence_needs_review")
                     diagnostic_json = chunk["diagnostic_json"]
                     if diagnostic_json is not None:
                         diagnostic = json.loads(str(diagnostic_json))
-                        if int(diagnostic.get("image_count", 0)) > 0:
+                        if int(diagnostic.get("image_count", 0)) > 0 and not visual_rows:
                             warnings.append("embedded_visual_content_not_extracted")
                     if len(drafts) >= _SETTINGS["maximum_candidates"]:
                         drafts = drafts[: _SETTINGS["maximum_candidates"]]
@@ -345,7 +418,7 @@ class DeterministicEventExtractor:
                     source_observation_key=None,
                     version_key=version_key,
                     parse_key=selected_parse_key,
-                    input_hash=self._parse_input_hash(str(version["sha256"]), parsed),
+                    input_hash=input_hash,
                     status="PARTIAL" if warnings else "COMPLETE",
                     warnings=tuple(dict.fromkeys(warnings)),
                 )
@@ -483,8 +556,11 @@ class DeterministicEventExtractor:
         text: str,
         evidence_key: int,
         source_kind: CandidateSourceKind = CandidateSourceKind.DOCUMENT,
+        *,
+        source_path_prefix: str | None = None,
     ) -> tuple[_CandidateDraft, ...]:
-        segments = self._text_segments(text)
+        segments = self._text_segments(text, source_path_prefix=source_path_prefix)
+        numeric_date_order = self._numeric_date_order(text)
         drafts: list[_CandidateDraft] = []
         for index, anchor in enumerate(segments):
             event_type, keyword = self._event_type(anchor.text)
@@ -492,6 +568,8 @@ class DeterministicEventExtractor:
                 continue
             block = [anchor]
             for following in segments[index + 1 : index + _SETTINGS["context_maximum_segments"]]:
+                if _ROW_BOUNDARY_PATTERN.fullmatch(following.text) is not None:
+                    break
                 following_type, _ = self._event_type(following.text)
                 if following_type is not None:
                     break
@@ -522,18 +600,22 @@ class DeterministicEventExtractor:
                 evidence_key,
                 source_kind,
                 ordinal_prefix=ordinal_prefix,
+                numeric_date_order=numeric_date_order,
             )
             if draft is not None:
                 drafts.append(draft)
         return tuple(drafts)
 
     @staticmethod
-    def _text_segments(text: str) -> tuple[_TextSegment, ...]:
+    def _text_segments(
+        text: str, *, source_path_prefix: str | None = None
+    ) -> tuple[_TextSegment, ...]:
         parts = [part.strip() for part in _SPLIT.split(text) if part.strip()]
+        prefix = "text" if source_path_prefix is None else f"{source_path_prefix}.text"
         if len(parts) == 1:
-            return (_TextSegment(parts[0], "text"),)
+            return (_TextSegment(parts[0], prefix),)
         return tuple(
-            _TextSegment(part, f"text.segment.{index}") for index, part in enumerate(parts)
+            _TextSegment(part, f"{prefix}.segment.{index}") for index, part in enumerate(parts)
         )
 
     def _draft_from_block(
@@ -545,9 +627,15 @@ class DeterministicEventExtractor:
         source_kind: CandidateSourceKind,
         *,
         ordinal_prefix: _TextSegment | None,
+        numeric_date_order: str | None,
     ) -> _CandidateDraft | None:
         if len(block) == 1 and ordinal_prefix is None:
-            block = (_TextSegment(block[0].text, "text"),)
+            path = (
+                block[0].source_path
+                if block[0].source_path.startswith("representation.")
+                else "text"
+            )
+            block = (_TextSegment(block[0].text, path),)
         mention = "\n".join(segment.text for segment in block)
         if _NEGATED_EVENT_PATTERN.search(block[0].text) is not None:
             return None
@@ -577,6 +665,20 @@ class DeterministicEventExtractor:
         title = self._candidate_title(anchor.text, boundary)
         title_text = anchor.text[:boundary].strip(" :-–—\t") or title
         title_path = anchor.source_path
+        title_offset = title_text.casefold().find(title.casefold())
+        if title_offset > 0:
+            title_text = title_text[title_offset : title_offset + len(title)]
+        if re.fullmatch(r"(?:assignment\s+)?submission", title, re.I) and len(block) > 1:
+            selection = re.search(
+                r"\b(?:choose|select)\b(?P<wording>[^.;\n]{0,300}?)"
+                r"\b(?P<object>topic|subject|project|option|group)\b",
+                block[1].text,
+                re.I,
+            )
+            if selection is not None:
+                title = f"{selection.group('object').lower()} selection"
+                title_text = selection.group(0).strip()
+                title_path = block[1].source_path
         if ordinal_prefix is not None:
             ordinal = ordinal_prefix.text.strip(" -*•\t")
             title = f"{ordinal} {title}"
@@ -644,7 +746,13 @@ class DeterministicEventExtractor:
             return None
 
         first_name = CandidateFieldName.DUE_TIME if is_due else CandidateFieldName.START_TIME
-        temporal_fields = self._temporal_fields_from_block(block, mention, temporals, first_name)
+        temporal_fields = self._temporal_fields_from_block(
+            block,
+            mention,
+            temporals,
+            first_name,
+            numeric_date_order=numeric_date_order,
+        )
         if not temporal_fields:
             return None
         fields.extend(temporal_fields)
@@ -675,8 +783,22 @@ class DeterministicEventExtractor:
         mention: str,
         temporals: list[re.Match[str]],
         first_name: CandidateFieldName,
+        *,
+        numeric_date_order: str | None,
     ) -> tuple[_FieldDraft, ...]:
         first = temporals[0]
+        if len(temporals) > 1 and re.fullmatch(r"Week\s+\d{1,2}", first.group(0), re.I):
+            refinement = temporals[1]
+            same_segment = self._path_for_span(
+                block, first.start(), first.end()
+            ) == self._path_for_span(block, refinement.start(), refinement.end())
+            if same_segment and re.search(
+                r"\(\s*(?:by|due(?:\s+on)?)\s*$",
+                mention[first.end() : refinement.start()],
+                re.I,
+            ):
+                temporals = temporals[1:]
+                first = refinement
         date_match = _DATE_PATTERN.search(first.group(0))
         range_match = _TIME_RANGE_PATTERN.search(mention, first.end())
         if range_match is not None and (
@@ -701,6 +823,7 @@ class DeterministicEventExtractor:
                         source_path,
                         zone=range_match.group("zone"),
                         shared_meridiem=self._meridiem(range_match.group("end")),
+                        numeric_date_order=numeric_date_order,
                     ),
                     self._local_temporal_from_text(
                         CandidateFieldName.END_TIME,
@@ -709,6 +832,7 @@ class DeterministicEventExtractor:
                         original,
                         source_path,
                         zone=range_match.group("zone"),
+                        numeric_date_order=numeric_date_order,
                     ),
                 )
             except ValueError:
@@ -718,7 +842,7 @@ class DeterministicEventExtractor:
         first_path = self._path_for_span(block, first.start(), first.end())
         first_is_date_only = (
             date_match is not None
-            and re.search(rf"\d{{1,2}}[:.]\d{{2}}(?:\s*{_ZONE})?\s*$", first_text, re.I) is None
+            and re.search(rf"{_CLOCK}(?:\s*{_ZONE_WRAPPED})?\s*$", first_text, re.I) is None
         )
         if first_is_date_only:
             assert date_match is not None
@@ -742,12 +866,20 @@ class DeterministicEventExtractor:
                             original,
                             source_path,
                             zone=clock_match.group("zone"),
+                            numeric_date_order=numeric_date_order,
                         ),
                     )
                 except ValueError:
                     return ()
         try:
-            fields = [self._temporal_from_text(first_name, first_text, source_path=first_path)]
+            fields = [
+                self._temporal_from_text(
+                    first_name,
+                    first_text,
+                    source_path=first_path,
+                    numeric_date_order=numeric_date_order,
+                )
+            ]
         except ValueError:
             return ()
         if len(temporals) > 1 and re.search(
@@ -762,6 +894,7 @@ class DeterministicEventExtractor:
                         CandidateFieldName.END_TIME,
                         second.group(0),
                         source_path=self._path_for_span(block, second.start(), second.end()),
+                        numeric_date_order=numeric_date_order,
                     )
                 )
             except ValueError:
@@ -901,10 +1034,20 @@ class DeterministicEventExtractor:
         *,
         zone: str | None,
         shared_meridiem: str | None = None,
+        numeric_date_order: str | None = None,
     ) -> _FieldDraft:
-        date = cls._parse_date_only(date_text)
         hour, minute = cls._parse_clock(clock_text, shared_meridiem=shared_meridiem)
         local_time = f"{hour:02d}:{minute:02d}"
+        if cls._ambiguous_slash_dates(date_text, numeric_date_order):
+            return cls._ambiguous_numeric_temporal(
+                name,
+                date_text,
+                original_text,
+                source_path,
+                local_time=local_time,
+                source_timezone=zone,
+            )
+        date = cls._parse_date_only(date_text, numeric_date_order=numeric_date_order)
         if zone is None:
             value: dict[str, JsonValue] = {
                 "date": date,
@@ -922,7 +1065,9 @@ class DeterministicEventExtractor:
                 TemporalPrecision.UNKNOWN,
                 source_path=source_path,
             )
-        parsed, source_timezone = cls._parse_exact(f"{date} {local_time} {zone}")
+        parsed, source_timezone = cls._parse_exact(
+            f"{date} {local_time} {zone}", numeric_date_order=numeric_date_order
+        )
         value = {
             "date_source_text": date_text,
             "instant": to_storage_time(parsed),
@@ -961,6 +1106,80 @@ class DeterministicEventExtractor:
         return hour, minute
 
     @staticmethod
+    def _slash_date_possibilities(value: str) -> dict[str, str]:
+        match = _SLASH_DATE_PATTERN.fullmatch(value.strip())
+        if match is None:
+            return {}
+        first_text, second_text, year_text = match.group(0).split("/")
+        first = int(first_text)
+        second = int(second_text)
+        year = int(year_text)
+        if len(year_text) == 2:
+            year += 2000
+        possibilities: dict[str, str] = {}
+        for order, month, day in (("MDY", first, second), ("DMY", second, first)):
+            try:
+                possibilities[order] = date(year, month, day).isoformat()
+            except ValueError:
+                continue
+        return possibilities
+
+    @classmethod
+    def _numeric_date_order(cls, text: str) -> str | None:
+        orders: set[str] = set()
+        for match in _SLASH_DATE_PATTERN.finditer(text):
+            possibilities = cls._slash_date_possibilities(match.group(0))
+            if len(possibilities) == 1:
+                orders.update(possibilities)
+        return next(iter(orders)) if len(orders) == 1 else None
+
+    @classmethod
+    def _ambiguous_slash_dates(cls, value: str, numeric_date_order: str | None) -> bool:
+        match = _SLASH_DATE_PATTERN.search(value)
+        if match is None:
+            return False
+        possibilities = cls._slash_date_possibilities(match.group(0))
+        if not possibilities:
+            raise ValueError("numeric source date is invalid")
+        return numeric_date_order is None and len(set(possibilities.values())) > 1
+
+    @classmethod
+    def _ambiguous_numeric_temporal(
+        cls,
+        name: CandidateFieldName,
+        date_text: str,
+        source_text: str,
+        source_path: str,
+        *,
+        local_time: str | None = None,
+        source_timezone: str | None = None,
+    ) -> _FieldDraft:
+        match = _SLASH_DATE_PATTERN.search(date_text)
+        if match is None:
+            raise ValueError("numeric source date is unavailable")
+        possibilities = cls._slash_date_possibilities(match.group(0))
+        possible_dates: list[JsonValue] = list(sorted(set(possibilities.values())))
+        value: dict[str, JsonValue] = {
+            "date": None,
+            "date_order": None,
+            "instant": None,
+            "possible_dates": possible_dates,
+            "precision": TemporalPrecision.UNKNOWN.value,
+            "source_text": source_text,
+            "source_timezone": source_timezone,
+        }
+        if local_time is not None:
+            value["local_time"] = local_time
+        return _FieldDraft(
+            name,
+            value,
+            source_text,
+            TemporalPrecision.UNKNOWN,
+            source_timezone,
+            source_path,
+        )
+
+    @staticmethod
     def _event_type(text: str) -> tuple[EventType | None, str]:
         for pattern, event_type in _TYPE_PATTERNS:
             match = pattern.search(text)
@@ -970,13 +1189,21 @@ class DeterministicEventExtractor:
 
     @staticmethod
     def _candidate_title(text: str, temporal_start: int) -> str:
+        prefix = text[:temporal_start].strip(" :-–—\t")
         prefix = re.sub(
-            r"\b(?:is|will be|due|deadline|on|at|from)\s*$",
+            r"\b(?:is|will be|due(?:\s+(?:on|date))?|deadline|on|at|from)\s*$",
             "",
-            text[:temporal_start],
+            prefix,
             flags=re.I,
         )
         prefix = prefix.strip(" :-–—\t")
+        prefix = re.sub(
+            r"^(?:(?:Instructor|Lecturer|Tutor|Professor|Prof|Dr)\.?\s*[:–—-]?\s+)"
+            r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+"
+            r"(?=(?:Assignment|Homework|Quiz|Test|Exam(?:ination)?)\b)",
+            "",
+            prefix,
+        )
         prefix = re.sub(
             r"\s+(?:has\s+been\s+|is\s+|was\s+)?"
             r"(?:moved|postponed|rescheduled|cancelled|canceled)\s*(?:to)?\s*$",
@@ -1044,7 +1271,11 @@ class DeterministicEventExtractor:
 
     @staticmethod
     def _temporal_from_text(
-        name: CandidateFieldName, source_text: str, *, source_path: str = "text"
+        name: CandidateFieldName,
+        source_text: str,
+        *,
+        source_path: str = "text",
+        numeric_date_order: str | None = None,
     ) -> _FieldDraft:
         normalized = source_text.strip()
         if re.fullmatch(r"Week\s+\d{1,2}", normalized, re.I):
@@ -1065,9 +1296,18 @@ class DeterministicEventExtractor:
                 TemporalPrecision.WEEK_ONLY,
                 source_path=source_path,
             )
+        if DeterministicEventExtractor._ambiguous_slash_dates(normalized, numeric_date_order):
+            return DeterministicEventExtractor._ambiguous_numeric_temporal(
+                name,
+                normalized,
+                source_text,
+                source_path,
+            )
         exact = bool(re.search(r"\d{1,2}[:.]\d{2}", normalized))
         if not exact:
-            normalized_date = DeterministicEventExtractor._parse_date_only(normalized)
+            normalized_date = DeterministicEventExtractor._parse_date_only(
+                normalized, numeric_date_order=numeric_date_order
+            )
             value = {
                 "instant": None,
                 "precision": TemporalPrecision.DATE_ONLY.value,
@@ -1082,7 +1322,9 @@ class DeterministicEventExtractor:
                 TemporalPrecision.DATE_ONLY,
                 source_path=source_path,
             )
-        parsed, source_timezone = DeterministicEventExtractor._parse_exact(normalized)
+        parsed, source_timezone = DeterministicEventExtractor._parse_exact(
+            normalized, numeric_date_order=numeric_date_order
+        )
         value = {
             "instant": to_storage_time(parsed),
             "precision": TemporalPrecision.EXACT_TIME.value,
@@ -1099,8 +1341,20 @@ class DeterministicEventExtractor:
         )
 
     @staticmethod
-    def _parse_date_only(value: str) -> str:
+    def _parse_date_only(value: str, *, numeric_date_order: str | None = None) -> str:
         cleaned = value.replace(",", "").strip()
+        slash = _SLASH_DATE_PATTERN.fullmatch(cleaned)
+        if slash is not None:
+            possibilities = DeterministicEventExtractor._slash_date_possibilities(cleaned)
+            if numeric_date_order is None:
+                distinct_dates = set(possibilities.values())
+                if len(distinct_dates) != 1:
+                    raise ValueError("numeric source date order is ambiguous")
+                return next(iter(distinct_dates))
+            try:
+                return possibilities[numeric_date_order]
+            except KeyError:
+                raise ValueError("numeric source date does not match its page context") from None
         cleaned = re.sub(rf"^(?:{_WEEKDAY})\s+", "", cleaned, flags=re.I)
         cleaned = re.sub(r"\b(\d{1,2})(?:st|nd|rd|th)\b", r"\1", cleaned, flags=re.I)
         for pattern in ("%Y-%m-%d", "%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
@@ -1111,8 +1365,17 @@ class DeterministicEventExtractor:
         raise ValueError("date-only source time is invalid")
 
     @staticmethod
-    def _parse_exact(value: str) -> tuple[datetime, str]:
-        if value.upper().endswith("SGT"):
+    def _parse_exact(value: str, *, numeric_date_order: str | None = None) -> tuple[datetime, str]:
+        utc_offset = re.search(r"\(?UTC(?P<sign>[+-])(?P<hours>\d{1,2})\)?$", value, re.I)
+        if utc_offset is not None:
+            hours = int(utc_offset.group("hours"))
+            if hours > 14:
+                raise ValueError("UTC source offset is invalid")
+            source_timezone = utc_offset.group(0).strip("()")
+            cleaned = value[: utc_offset.start()].rstrip()
+            sign = 1 if utc_offset.group("sign") == "+" else -1
+            tz = timezone(sign * timedelta(hours=hours))
+        elif value.upper().endswith("SGT"):
             source_timezone = "SGT"
             cleaned = re.sub(r"\s*SGT$", "", value, flags=re.I)
             tz = timezone(timedelta(hours=8))
@@ -1130,18 +1393,47 @@ class DeterministicEventExtractor:
                 tz = UTC
             else:
                 sign = 1 if source_timezone.startswith("+") else -1
-                hours, minutes = source_timezone[1:].split(":")
-                tz = timezone(sign * timedelta(hours=int(hours), minutes=int(minutes)))
+                offset_hours, offset_minutes = source_timezone[1:].split(":")
+                tz = timezone(
+                    sign * timedelta(hours=int(offset_hours), minutes=int(offset_minutes))
+                )
+        slash = _SLASH_DATE_PATTERN.match(cleaned)
+        if slash is not None:
+            normalized_date = DeterministicEventExtractor._parse_date_only(
+                slash.group(0), numeric_date_order=numeric_date_order
+            )
+            cleaned = normalized_date + cleaned[slash.end() :]
         if re.match(r"\d{4}-\d{2}-\d{2}", cleaned):
-            parsed = datetime.fromisoformat(cleaned)
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=tz)
-            return parsed.astimezone(UTC), source_timezone
+            cleaned = re.sub(r"\s+at\s+", " ", cleaned, flags=re.I).replace(",", "")
+            cleaned = re.sub(r"\s*([ap])\.?m\.?$", r" \1m", cleaned, flags=re.I)
+            for pattern in (None, "%Y-%m-%d %I:%M %p"):
+                try:
+                    parsed = (
+                        datetime.fromisoformat(cleaned)
+                        if pattern is None
+                        else datetime.strptime(cleaned, pattern)
+                    )
+                except ValueError:
+                    continue
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=tz)
+                return parsed.astimezone(UTC), source_timezone
+            raise ValueError("exact source time is unsupported")
         cleaned = re.sub(r"\s+at\s+", " ", cleaned, flags=re.I).replace(",", "")
         cleaned = re.sub(rf"^(?:{_WEEKDAY})\s+", "", cleaned, flags=re.I)
         cleaned = re.sub(r"\b(\d{1,2})(?:st|nd|rd|th)\b", r"\1", cleaned, flags=re.I)
         cleaned = re.sub(r"(?<=\d)\.(?=\d{2}$)", ":", cleaned)
-        for pattern in ("%d %B %Y %H:%M", "%d %b %Y %H:%M", "%B %d %Y %H:%M", "%b %d %Y %H:%M"):
+        cleaned = re.sub(r"\s*([ap])\.?m\.?$", r" \1m", cleaned, flags=re.I)
+        for pattern in (
+            "%d %B %Y %H:%M",
+            "%d %b %Y %H:%M",
+            "%B %d %Y %H:%M",
+            "%b %d %Y %H:%M",
+            "%d %B %Y %I:%M %p",
+            "%d %b %Y %I:%M %p",
+            "%B %d %Y %I:%M %p",
+            "%b %d %Y %I:%M %p",
+        ):
             try:
                 parsed = datetime.strptime(cleaned, pattern)
             except ValueError:
@@ -1157,17 +1449,31 @@ class DeterministicEventExtractor:
         return value
 
     @staticmethod
-    def _parse_input_hash(resource_sha256: str, parsed: sqlite3.Row) -> str:
-        payload = "\0".join(
-            (
-                resource_sha256,
-                str(parsed["parser_name"]),
-                str(parsed["parser_version"]),
-                str(parsed["engine_version"]),
-                str(parsed["settings_hash"]),
-                str(parsed["parse_key"]),
+    def _parse_input_hash(
+        resource_sha256: str,
+        parsed: sqlite3.Row,
+        representations: list[sqlite3.Row] | tuple[sqlite3.Row, ...] = (),
+    ) -> str:
+        components = [
+            resource_sha256,
+            str(parsed["parser_name"]),
+            str(parsed["parser_version"]),
+            str(parsed["engine_version"]),
+            str(parsed["settings_hash"]),
+            str(parsed["parse_key"]),
+        ]
+        for representation in representations:
+            text_hash = hashlib.sha256(str(representation["text"]).encode("utf-8")).hexdigest()
+            components.extend(
+                (
+                    str(representation["representation_key"]),
+                    str(representation["settings_hash"]),
+                    str(representation["review_status"]),
+                    str(representation["rendered_sha256"]),
+                    text_hash,
+                )
             )
-        )
+        payload = "\0".join(components)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _insert_extraction(
@@ -1270,6 +1576,7 @@ class DeterministicEventExtractor:
         observation_key: int | None,
         version_key: int | None,
         parse_key: int | None,
+        input_hash: str,
     ) -> int | None:
         row = connection.execute(
             """
@@ -1277,6 +1584,7 @@ class DeterministicEventExtractor:
             WHERE input_kind = ? AND source_observation_key IS ? AND version_key IS ?
               AND parse_key IS ?
               AND extractor_name = ? AND extractor_version = ? AND settings_hash = ?
+              AND input_hash = ?
             """,
             (
                 input_kind,
@@ -1286,6 +1594,7 @@ class DeterministicEventExtractor:
                 self.name,
                 self.version,
                 _SETTINGS_HASH,
+                input_hash,
             ),
         ).fetchone()
         return None if row is None else int(row[0])

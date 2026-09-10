@@ -503,6 +503,38 @@ class SearchIndex:
         course_key: int | None = None,
         resource_key: int | None = None,
     ) -> None:
+        has_visual_metadata = (
+            connection.execute(
+                """SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'visual_evidence_metadata'"""
+            ).fetchone()
+            is not None
+        )
+        visual_join = (
+            """LEFT JOIN visual_evidence_metadata metadata
+              ON metadata.representation_key = representation.representation_key"""
+            if has_visual_metadata
+            else ""
+        )
+        visual_filter = (
+            """AND (
+                  representation.representation_kind <> 'vision_description'
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM chunk_representation newer
+                      JOIN visual_evidence_metadata newer_metadata
+                        ON newer_metadata.representation_key = newer.representation_key
+                      WHERE newer.chunk_key = representation.chunk_key
+                        AND newer.representation_kind = 'vision_description'
+                        AND newer.method = representation.method
+                        AND newer_metadata.version_key = metadata.version_key
+                        AND newer_metadata.source_page_index = metadata.source_page_index
+                        AND newer.representation_key > representation.representation_key
+                  )
+              )"""
+            if has_visual_metadata
+            else ""
+        )
         connection.execute(
             f"""
             INSERT INTO search_document(
@@ -519,6 +551,7 @@ class SearchIndex:
                 {_SEMANTIC_CONFIDENCE_SQL}, v.file_format, r.availability, parsed.coverage,
                 'derived:' || representation.representation_kind, representation.text
             FROM chunk_representation representation
+            {visual_join}
             JOIN document_chunk chunk ON chunk.chunk_key = representation.chunk_key
             JOIN source_locator locator ON locator.chunk_key = chunk.chunk_key
             JOIN parsed_document parsed ON parsed.parse_key = chunk.parse_key
@@ -527,6 +560,7 @@ class SearchIndex:
             JOIN content_node n ON n.content_key = r.content_key
             JOIN course c ON c.course_key = n.course_key
             WHERE representation.text IS NOT NULL
+              {visual_filter}
               AND (? IS NULL OR c.course_key = ?)
               AND (? IS NULL OR r.resource_key = ?)
             ORDER BY representation.representation_key

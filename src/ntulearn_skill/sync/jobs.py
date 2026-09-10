@@ -132,15 +132,11 @@ def _parser_options(payload: dict[str, JsonValue]) -> ParserOptions:
     limits = settings.get("limits")
     if not isinstance(diagnostics, dict) or not isinstance(limits, dict):
         raise ValueError("local parser settings spec is invalid")
-    if (
-        set(diagnostics)
-        != {
-            "drawing_operator_threshold",
-            "low_text_character_threshold",
-            "version",
-        }
-        or diagnostics.get("version") != "stage-b-1"
-    ):
+    if set(diagnostics) != {
+        "drawing_operator_threshold",
+        "low_text_character_threshold",
+        "version",
+    } or diagnostics.get("version") not in {"stage-b-1", "stage-b-2"}:
         raise ValueError("local parser diagnostics spec is invalid")
     expected_limits = set(ParserLimits().as_settings())
     if set(limits) != expected_limits:
@@ -156,6 +152,7 @@ def _parser_options(payload: dict[str, JsonValue]) -> ParserOptions:
         limits=ParserLimits(**cast(dict[str, int], limits)),
         drawing_operator_threshold=cast(int, diagnostics["drawing_operator_threshold"]),
         low_text_character_threshold=cast(int, diagnostics["low_text_character_threshold"]),
+        diagnostic_version=cast(str, diagnostics["version"]),
     )
     if _required_text(payload, "settings_hash") != options.settings_hash:
         raise ValueError("local parser settings hash does not match its spec")

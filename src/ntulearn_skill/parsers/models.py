@@ -37,6 +37,11 @@ class RepresentationKind(StrEnum):
     OTHER = "other"
 
 
+class VisualReviewStatus(StrEnum):
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    PARTIAL = "PARTIAL"
+
+
 @dataclass(frozen=True, slots=True)
 class ParserLimits:
     maximum_input_bytes: int = 64 * 1024 * 1024
@@ -85,12 +90,15 @@ class ParserOptions:
     limits: ParserLimits = field(default_factory=ParserLimits)
     low_text_character_threshold: int = 48
     drawing_operator_threshold: int = 12
+    diagnostic_version: str = "stage-b-2"
 
     def __post_init__(self) -> None:
         if self.low_text_character_threshold < 0:
             raise ValueError("low-text threshold cannot be negative")
         if self.drawing_operator_threshold < 0:
             raise ValueError("drawing-operator threshold cannot be negative")
+        if self.diagnostic_version not in {"stage-b-1", "stage-b-2"}:
+            raise ValueError("unsupported parser diagnostic version")
 
     def canonical_settings(self) -> dict[str, JsonValue]:
         limit_settings: dict[str, JsonValue] = {
@@ -100,7 +108,7 @@ class ParserOptions:
             "diagnostics": {
                 "drawing_operator_threshold": self.drawing_operator_threshold,
                 "low_text_character_threshold": self.low_text_character_threshold,
-                "version": "stage-b-1",
+                "version": self.diagnostic_version,
             },
             "limits": limit_settings,
         }
@@ -254,6 +262,25 @@ class ChunkRepresentationRecord:
     settings_hash: str
     confidence: float | None
     diagnostic_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class VisualEvidenceMetadata:
+    version_key: int
+    source_sha256: str
+    source_page_index: int
+    rendered_sha256: str
+    method_version: str
+    settings: dict[str, JsonValue]
+    review_status: VisualReviewStatus
+    uncertainty: tuple[str, ...]
+    source_locator: dict[str, JsonValue]
+
+
+@dataclass(frozen=True, slots=True)
+class VisualEvidenceRecord:
+    representation: ChunkRepresentationRecord
+    metadata: VisualEvidenceMetadata
 
 
 @dataclass(frozen=True, slots=True)

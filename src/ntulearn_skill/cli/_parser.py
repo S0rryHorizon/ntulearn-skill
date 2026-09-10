@@ -40,6 +40,7 @@ _upcoming_days = _bounded_integer(minimum=1, maximum=3650)
 _recent_days = _bounded_integer(minimum=1, maximum=3650)
 _sync_job_limit = _bounded_integer(minimum=1, maximum=10_000)
 _max_age_seconds = _bounded_integer(minimum=1, maximum=315_360_000)
+_visual_dpi = _bounded_integer(minimum=72, maximum=300)
 
 
 def _confidence(value: str) -> float:
@@ -210,6 +211,24 @@ def build_parser() -> SafeArgumentParser:
     _common_options(fetch)
     fetch.add_argument("resource_key", type=_positive_key)
     fetch.add_argument("--verify", action="store_true")
+
+    visual = commands.add_parser(
+        "visual", help="Prepare or import selective private visual evidence"
+    )
+    _common_options(visual)
+    visual_commands = visual.add_subparsers(dest="visual_action", required=True)
+    visual_prepare = visual_commands.add_parser(
+        "prepare", help="Render only parser-flagged PDF pages"
+    )
+    _common_options(visual_prepare)
+    visual_prepare.add_argument("parse_key", type=_positive_key)
+    visual_prepare.add_argument("--dpi", type=_visual_dpi, default=150)
+    visual_prepare.add_argument("--include-local-path", action="store_true")
+    visual_import = visual_commands.add_parser(
+        "import", help="Import a private host view-image result bundle"
+    )
+    _common_options(visual_import)
+    visual_import.add_argument("bundle_path", metavar="PRIVATE_BUNDLE")
     return parser
 
 

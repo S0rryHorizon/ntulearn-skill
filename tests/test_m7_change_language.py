@@ -168,7 +168,7 @@ def test_qualified_change_language_abstains_before_reconciliation(
     reconciled = harness.reconciler.reconcile_course(harness.course)
 
     assert qualified_extraction.candidates == ()
-    assert qualified_extraction.extractor_version == "4"
+    assert qualified_extraction.extractor_version == "5"
     assert len(reconciled.events) == 1
     event = reconciled.events[0]
     assert event.field(CandidateFieldName.STATUS) is None

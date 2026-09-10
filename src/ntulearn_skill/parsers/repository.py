@@ -21,6 +21,9 @@ from ntulearn_skill.parsers.models import (
     ParserDescriptor,
     ParseStatus,
     RepresentationKind,
+    VisualEvidenceMetadata,
+    VisualEvidenceRecord,
+    VisualReviewStatus,
 )
 from ntulearn_skill.storage.database import Database, StorageError
 from ntulearn_skill.storage.resources import ResourceVersionRecord
@@ -331,6 +334,170 @@ class ParseRepository:
         finally:
             connection.close()
 
+    def append_visual_representation(
+        self,
+        chunk_key: int,
+        output: FallbackOutput,
+        metadata: VisualEvidenceMetadata,
+        *,
+        diagnostic_reason: str,
+    ) -> VisualEvidenceRecord:
+        """Atomically append an immutable representation and its visual provenance."""
+
+        return self.append_visual_representations(
+            ((chunk_key, output, metadata, diagnostic_reason),)
+        )[0]
+
+    def append_visual_representations(
+        self,
+        requests: tuple[tuple[int, FallbackOutput, VisualEvidenceMetadata, str], ...],
+    ) -> tuple[VisualEvidenceRecord, ...]:
+        """Append a fully validated visual-evidence bundle in one transaction."""
+
+        if not requests:
+            return ()
+        for _chunk_key, output, metadata, _diagnostic_reason in requests:
+            if output.artifact_relpath is not None:
+                path = PurePosixPath(output.artifact_relpath)
+                if path.is_absolute() or ".." in path.parts:
+                    raise ValueError("fallback artifact path must be private-root relative")
+            if len(metadata.uncertainty) > 20 or any(
+                not item.strip() or len(item) > 200 for item in metadata.uncertainty
+            ):
+                raise ValueError("visual uncertainty report exceeds configured limits")
+        try:
+            with self.database.transaction() as connection:
+                return tuple(
+                    self._append_visual_representation(
+                        connection,
+                        chunk_key,
+                        output,
+                        metadata,
+                        diagnostic_reason=diagnostic_reason,
+                    )
+                    for chunk_key, output, metadata, diagnostic_reason in requests
+                )
+        except sqlite3.Error:
+            raise ParseStorageError("visual evidence storage failed") from None
+
+    def _append_visual_representation(
+        self,
+        connection: sqlite3.Connection,
+        chunk_key: int,
+        output: FallbackOutput,
+        metadata: VisualEvidenceMetadata,
+        *,
+        diagnostic_reason: str,
+    ) -> VisualEvidenceRecord:
+        """Insert one visual representation inside its caller's transaction."""
+
+        connection.execute(
+            """
+                    INSERT INTO chunk_representation(
+                        chunk_key, representation_kind, text, artifact_relpath, method,
+                        provider, engine_version, settings_hash, confidence,
+                        diagnostic_reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(
+                        chunk_key, representation_kind, method, engine_version, settings_hash
+                    ) DO NOTHING
+                    """,
+            (
+                chunk_key,
+                output.representation_kind.value,
+                output.text,
+                output.artifact_relpath,
+                output.method,
+                output.provider,
+                output.engine_version,
+                output.settings_hash,
+                output.confidence,
+                diagnostic_reason,
+                to_storage_time(utc_now()),
+            ),
+        )
+        row = connection.execute(
+            """
+                    SELECT * FROM chunk_representation
+                    WHERE chunk_key = ? AND representation_kind = ? AND method = ?
+                      AND engine_version = ? AND settings_hash = ?
+                    """,
+            (
+                chunk_key,
+                output.representation_kind.value,
+                output.method,
+                output.engine_version,
+                output.settings_hash,
+            ),
+        ).fetchone()
+        assert row is not None
+        representation = self._representation(row)
+        if (
+            representation.chunk_key != chunk_key
+            or representation.representation_kind is not output.representation_kind
+            or representation.text != output.text
+            or representation.artifact_relpath != output.artifact_relpath
+            or representation.method != output.method
+            or representation.provider != output.provider
+            or representation.engine_version != output.engine_version
+            or representation.settings_hash != output.settings_hash
+            or representation.confidence != output.confidence
+            or representation.diagnostic_reason != diagnostic_reason
+        ):
+            raise ValueError("visual evidence cache identity collision")
+        connection.execute(
+            """
+                    INSERT INTO visual_evidence_metadata(
+                        representation_key, version_key, source_sha256, source_page_index,
+                        rendered_sha256, method_version, settings_json, review_status,
+                        uncertainty_json, source_locator_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(representation_key) DO NOTHING
+                    """,
+            (
+                representation.key,
+                metadata.version_key,
+                metadata.source_sha256,
+                metadata.source_page_index,
+                metadata.rendered_sha256,
+                metadata.method_version,
+                _json(metadata.settings),
+                metadata.review_status.value,
+                _json(list(metadata.uncertainty)),
+                _json(metadata.source_locator),
+                to_storage_time(utc_now()),
+            ),
+        )
+        metadata_row = connection.execute(
+            "SELECT * FROM visual_evidence_metadata WHERE representation_key = ?",
+            (representation.key,),
+        ).fetchone()
+        assert metadata_row is not None
+        stored = self._visual_metadata(metadata_row)
+        if stored != metadata:
+            raise ValueError("visual evidence cache identity collision")
+        return VisualEvidenceRecord(representation, stored)
+
+    def get_visual_evidence(self, representation_key: int) -> VisualEvidenceRecord | None:
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT representation.*, metadata.*
+                FROM chunk_representation representation
+                JOIN visual_evidence_metadata metadata USING(representation_key)
+                WHERE representation.representation_key = ?
+                """,
+                (representation_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            return VisualEvidenceRecord(self._representation(row), self._visual_metadata(row))
+        except (sqlite3.Error, ValueError, TypeError, json.JSONDecodeError):
+            raise ParseStorageError("visual evidence lookup failed") from None
+        finally:
+            connection.close()
+
     @staticmethod
     def _document(row: sqlite3.Row) -> ParsedDocumentRecord:
         warnings = json.loads(str(row["warning_codes_json"]))
@@ -410,4 +577,18 @@ class ParseRepository:
             settings_hash=str(row["settings_hash"]),
             confidence=None if row["confidence"] is None else float(row["confidence"]),
             diagnostic_reason=str(row["diagnostic_reason"]),
+        )
+
+    @staticmethod
+    def _visual_metadata(row: sqlite3.Row) -> VisualEvidenceMetadata:
+        return VisualEvidenceMetadata(
+            version_key=int(row["version_key"]),
+            source_sha256=str(row["source_sha256"]),
+            source_page_index=int(row["source_page_index"]),
+            rendered_sha256=str(row["rendered_sha256"]),
+            method_version=str(row["method_version"]),
+            settings=json.loads(str(row["settings_json"])),
+            review_status=VisualReviewStatus(str(row["review_status"])),
+            uncertainty=tuple(str(item) for item in json.loads(str(row["uncertainty_json"]))),
+            source_locator=json.loads(str(row["source_locator_json"])),
         )
