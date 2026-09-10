@@ -30,12 +30,14 @@ class Database:
         if lexical_path.is_symlink() or lexical_path.parent.is_symlink():
             raise StorageError("private metadata database path is unsafe")
         try:
+            validate_private_path(lexical_path.parent)
             self.path = validate_private_path(lexical_path)
         except RuntimePathError:
             raise StorageError("private metadata database path is unsafe") from None
         self.busy_timeout_ms = busy_timeout_ms
 
     def _prepare_path(self) -> None:
+        validate_private_path(self.path.parent)
         validate_private_path(self.path)
         ensure_private_directory(self.path.parent)
         self._reject_sqlite_links()

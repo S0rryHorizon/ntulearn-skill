@@ -64,7 +64,9 @@ started Skill session discover the same local library without embedding a machin
 in the installed Skill.
 
 Do not point the runtime at a tracked source directory. An explicit path below this
-repository's ignored `.local/` directory is accepted for development. For an isolated
+repository's `.local/` directory is accepted for development only after effective Git
+ignore and tracked-content checks pass. Unverifiable boundaries are rejected; the
+application does not edit ignore rules. For an isolated
 synthetic smoke test, create a temporary private root outside the checkout:
 
 ```console

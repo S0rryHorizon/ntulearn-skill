@@ -101,3 +101,27 @@ skills/ntulearn`; the validator is supplied by the host's skill-creator installa
 Independent read-only review passed the guide diff and seven synthetic evidence
 scenarios covering classification, time boundaries, overlap and conflicts. This
 instruction-level check is not a new real-course extraction evaluation.
+
+## R1/R2 release-blocker follow-up
+
+Comparison baseline: `ae40a3c`. R1 checks effective Git ignore and the index for
+in-checkout private paths, retains linked-path and escape protections, and rejects
+unverifiable boundaries with bounded errors. Direct database paths also validate
+their containing directory to protect SQLite sidecars. No ignore rules or existing
+private data are modified by boundary validation.
+
+R2 remains a publication blocker until a maintainer-controlled private reporting
+channel is designated and documented. No address has been supplied and no GitHub
+private reporting feature has been enabled. Ordinary non-sensitive issues and pull
+requests remain appropriate; private vulnerability details need a private channel.
+R3–R6 remain deferred and are not implemented by this follow-up.
+
+Focused Python 3.12 validation: 58 runtime-boundary/storage/browser-capture tests
+passed, followed by 23 CLI/public-artifact tests. Changed Python files passed Ruff
+lint/format and the two changed source modules passed mypy. These are synthetic
+checks; the full suite, live acceptance and existing private database were not run
+or changed for this follow-up.
+Independent review accepted the R1 diff and R2's pending status; its separate
+41-test boundary/storage run and additional synthetic probes passed. Wheel and
+sdist rebuilds and public-content audits passed. These outcomes do not close R2
+or authorize publication.

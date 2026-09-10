@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import stat
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -22,7 +23,8 @@ def _mode(path: Path) -> int:
 
 def _repository(path: Path) -> Path:
     path.mkdir()
-    (path / ".git").mkdir()
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    (path / ".gitignore").write_text(".local/\n", encoding="utf-8")
     return path
 
 

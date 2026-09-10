@@ -10,6 +10,17 @@ open.
 
 ## Current evidence snapshot
 
+The R1/R2 follow-up uses `ae40a3c` as its comparison baseline. Earlier PASS entries
+below describe their recorded versions and scope, not a new full-suite or live run.
+
+- [ ] R2: designate a maintainer-controlled private reporting address, or establish
+  the repository and enable GitHub private vulnerability reporting, then document
+  the actual channel in `SECURITY.md`. No channel is currently designated or enabled;
+  public issues and pull requests are not a substitute for private vulnerability
+  details. Repository creation and external feature enablement are outside this batch.
+- [ ] R3–R6: retained for a later scoped review; no implementation or completion
+  claim is included in the R1/R2 follow-up.
+
 | Area | Current evidence | State |
 | --- | --- | --- |
 | Local Core, CLI and Skills | Daily Chinese/English questions use the same typed local Core interfaces and source locators | **VERIFIED FOR BOUNDED TRIAL** |

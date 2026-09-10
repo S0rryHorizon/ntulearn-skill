@@ -60,7 +60,10 @@ Do not commit any of the following:
 
 Use a temporary directory outside the checkout for tests. If a development runtime
 must sit beside the source, place it only below the ignored `.local/` directory and
-pass that path explicitly. The narrow tracked-database exception under
+pass that path explicitly. Runtime validation requires Git to confirm effective
+ignore protection and rejects tracked runtime content; naming a directory `.local`
+does not establish that protection. The application does not edit ignore rules.
+The narrow tracked-database exception under
 `tests/fixtures/synthetic/` is for reviewed, demonstrably synthetic fixtures only.
 
 ## Change expectations

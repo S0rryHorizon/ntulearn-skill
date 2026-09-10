@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +26,7 @@ def find_repository_root(start: Path) -> Path | None:
     if current.is_file():
         current = current.parent
     for candidate in (current, *current.parents):
-        if (candidate / ".git").exists():
+        if (candidate / ".git").exists() or (candidate / ".git").is_symlink():
             return candidate
     return None
 
@@ -42,22 +43,100 @@ def _absolute_without_resolving(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path.expanduser())))
 
 
+def _git_boundary_output(repository: Path, *arguments: str, data: bytes | None = None) -> bytes:
+    # Caller Git overrides must not redirect discovery, the index, or ignore configuration.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    try:
+        result = subprocess.run(
+            ["git", "--no-optional-locks", "-C", os.fspath(repository), *arguments],
+            input=data,
+            capture_output=True,
+            env=environment,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise RuntimePathError("runtime Git privacy boundary could not be verified") from None
+    allowed_codes = (0, 1) if arguments[0] == "check-ignore" else (0,)
+    if result.returncode not in allowed_codes:
+        raise RuntimePathError("runtime Git privacy boundary could not be verified")
+    return result.stdout
+
+
+def _verify_git_boundary(repository: Path, path: Path) -> None:
+    top_level = _git_boundary_output(repository, "rev-parse", "--show-toplevel")
+    if top_level.rstrip(b"\n") != os.fsencode(repository):
+        raise RuntimePathError("runtime Git privacy boundary could not be verified")
+    relative = path.relative_to(repository).as_posix()
+    tracked = _git_boundary_output(
+        repository, "ls-files", "--cached", "-z", "--", f":(top,literal){relative}"
+    )
+    if tracked:
+        raise RuntimePathError("runtime data location contains Git-tracked content")
+    result = _git_boundary_output(
+        repository,
+        "check-ignore",
+        "--no-index",
+        "--verbose",
+        "-z",
+        "--stdin",
+        data=os.fsencode(relative) + b"\0",
+    )
+    fields = result.split(b"\0")
+    ignored = len(fields) == 5 and bool(fields[2]) and not fields[2].startswith(b"!")
+    if path.exists() and ignored:
+        return
+    # Git cannot infer that a nonexistent final component is a directory. Accept
+    # its slash form only for a literal directory rule, never a child wildcard
+    # ("runtime/*" also matches "runtime/" and can reinclude individual children).
+    if not path.exists():
+        result = _git_boundary_output(
+            repository,
+            "check-ignore",
+            "--no-index",
+            "--verbose",
+            "-z",
+            "--stdin",
+            data=os.fsencode(relative + "/") + b"\0",
+        )
+        fields = result.split(b"\0")
+        if len(fields) == 5:
+            pattern = fields[2]
+            if (
+                pattern
+                and not pattern.startswith(b"!")
+                and (
+                    ignored
+                    or (
+                        pattern.endswith(b"/")
+                        and not any(character in pattern for character in (b"*", b"?", b"[", b"\\"))
+                    )
+                )
+            ):
+                return
+    raise RuntimePathError("runtime data location is not verifiably Git-ignored")
+
+
 def validate_private_path(path: Path, *, explicit: bool = True) -> Path:
     """Resolve a private path while rejecting tracked-repository aliases."""
 
     lexical_path = _absolute_without_resolving(path)
     resolved_path = lexical_path.resolve()
-    repository = find_repository_root(resolved_path)
-    if repository is None:
-        return resolved_path
-
-    local_root = repository / ".local"
-    if not explicit or not _is_relative_to(lexical_path, local_root):
-        raise RuntimePathError("runtime data may not use a tracked repository path")
-    if local_root.is_symlink():
-        raise RuntimePathError("runtime data may not use a linked repository path")
-    if not _is_relative_to(resolved_path, local_root.resolve()):
-        raise RuntimePathError("runtime data may not escape the private local directory")
+    repositories = {
+        parent
+        for candidate in (lexical_path, resolved_path)
+        for parent in (candidate, *candidate.parents)
+        if (parent / ".git").exists() or (parent / ".git").is_symlink()
+    }
+    for repository in sorted(repositories):
+        local_root = repository / ".local"
+        if not explicit or not _is_relative_to(lexical_path, local_root):
+            raise RuntimePathError("runtime data may not use a tracked repository path")
+        if local_root.is_symlink():
+            raise RuntimePathError("runtime data may not use a linked repository path")
+        if not _is_relative_to(resolved_path, local_root.resolve()):
+            raise RuntimePathError("runtime data may not escape the private local directory")
+        _verify_git_boundary(repository, resolved_path)
     return resolved_path
 
 

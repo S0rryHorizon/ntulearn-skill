@@ -50,6 +50,23 @@ During development, private artifacts may instead use the ignored `.local/` tree
 └── credentials/
 ```
 
+An in-checkout runtime requires an explicit path below `.local/`, effective Git
+ignore protection and no tracked runtime content. Validation checks Git's actual
+rules and index; the directory name alone grants no exception. Missing Git,
+unverifiable repository state or ineffective ignore protection causes a bounded,
+privacy-safe error rather than allowing runtime initialization. The application
+does not create ignore rules or move existing data to repair a rejected boundary.
+For a direct database path, its containing directory must also be protected so that
+SQLite sidecar files are not exposed by a rule that ignores only the main database.
+Ignoring the whole `.local/` tree or just the selected `.local/runtime/` directory
+is supported. For a directory that does not yet exist, complex wildcard-only rules
+may be rejected when whole-directory protection cannot be established. Ignoring
+selected file extensions alone is insufficient for a runtime directory.
+
+This is a check of the current filesystem and Git state, not a permanent lock on
+ignore rules or the index. Later rule changes or forced staging can still expose
+data. Keep the staged-file privacy review, and prefer a runtime outside Git.
+
 ## NEVER COMMIT
 
 - Passwords, credentials, cookies, sessions, tokens, CSRF values, or authentication headers.

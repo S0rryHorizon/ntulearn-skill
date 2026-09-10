@@ -91,8 +91,11 @@ be installed by path; the development workflow and exact validation commands are
 The default runtime root is `~/.ntulearn-skill/`. Override it with `--root PRIVATE_ROOT`, then `NTULEARN_DATA_DIR`, then an absolute
 `runtime_root` in the private host file `~/.ntulearn-skill/config.json`, in that
 precedence order. A path inside
-a Git checkout is rejected unless it is explicitly below that checkout's ignored
-`.local/` directory.
+a Git checkout is rejected unless it is explicitly below that checkout's `.local/`
+directory and Git confirms the private boundary is effectively ignored and contains
+no tracked runtime content. The directory name alone is insufficient. If the Git
+boundary cannot be verified, the operation fails with a privacy-safe error. See
+[data boundaries](docs/privacy/data-boundaries.md) for the scope of this check.
 
 ```console
 ntulearn --json courses
