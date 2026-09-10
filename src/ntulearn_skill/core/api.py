@@ -1556,6 +1556,7 @@ class CoreService:
                             LIMIT 1
                         ) AS previous_version_key
                     FROM resource_observation observation
+                    WHERE observation.observation_status <> 'UNKNOWN'
                     WINDOW ordering AS (
                         PARTITION BY observation.resource_key
                         ORDER BY observation.observed_at, observation.sync_run_key,

@@ -11,6 +11,7 @@ from ntulearn_skill.cli import run
 from ntulearn_skill.client import TimeWindow
 from ntulearn_skill.core import AttachmentId, ContentId, CourseId, Coverage
 from ntulearn_skill.core.api import CoreService, CourseRef, SourceLocatorRef
+from ntulearn_skill.core.models import Availability, ObservationStatus
 from ntulearn_skill.integrations.codex import CodexToolDispatcher
 from ntulearn_skill.search import SourceReference, SourceReferenceKind
 from ntulearn_skill.storage import Database, DomainRepository, ResourceRepository, RuntimePaths
@@ -115,6 +116,54 @@ def test_recent_changes_materials_require_a_changed_observation(tmp_path: Path) 
         )
     )
     assert source.items[0].observation["sanitized_metadata"] == {"revision": "two"}
+
+
+def test_incomplete_observation_is_not_a_material_update(tmp_path: Path) -> None:
+    root, service, course_key = _runtime(tmp_path)
+    repository = ResourceRepository(service.database)
+
+    def observe(hours: int, status: ObservationStatus, availability: Availability) -> int:
+        at = NOW - timedelta(hours=hours)
+        _resource, observation = repository.observe(
+            AttachmentId("synthetic", "resource-one"),
+            content_id=ContentId("synthetic", "content-one"),
+            sync_run_key=_sync_run(service.database, at),
+            display_title="Invented lecture notes",
+            original_filename="invented-notes.pdf",
+            sanitized_metadata={"revision": "two"},
+            observation_status=status,
+            availability=availability,
+            observed_at=at,
+        )
+        return observation.key
+
+    unknown = observe(3, ObservationStatus.UNKNOWN, Availability.UNKNOWN)
+    window = TimeWindow(NOW - timedelta(hours=4), NOW)
+    assert service.get_recent_material_changes(CourseRef(local_key=course_key), window).items == ()
+    observe(2, ObservationStatus.OBSERVED, Availability.ACTIVE)
+    assert service.get_recent_material_changes(CourseRef(local_key=course_key), window).items == ()
+
+    unavailable = observe(1, ObservationStatus.UNAVAILABLE, Availability.UNAVAILABLE)
+    result = service.get_recent_material_changes(CourseRef(local_key=course_key), window)
+    assert [(item.observation_key, item.change_kinds) for item in result.items] == [
+        (unavailable, ("AVAILABILITY_CHANGED",))
+    ]
+    retained = service.resolve_source(
+        SourceLocatorRef(SourceReference(SourceReferenceKind.RESOURCE_OBSERVATION, unknown))
+    )
+    assert retained.items[0].observation["observation_status"] == "UNKNOWN"
+    output = io.StringIO()
+    assert (
+        run(
+            ["--json", "--root", str(root), "recent-materials", str(course_key), "--days", "1"],
+            stdout=output,
+            now=lambda: NOW,
+        )
+        == 2
+    )
+    envelope = json.loads(output.getvalue())
+    assert envelope["refresh_attempted"] is False
+    assert all(item["observation_key"] != unknown for item in envelope["items"])
 
 
 def test_metadata_only_observation_does_not_make_a_reused_version_look_new(
