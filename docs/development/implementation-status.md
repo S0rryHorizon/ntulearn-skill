@@ -80,3 +80,24 @@ The five-question installed Skill session passed with explicit coverage and sour
 limitations. This supports a limited experimental retrieval candidate, not authoritative
 event automation or an unrestricted public-release declaration. Earlier phase gates
 above describe their historical acceptance scope.
+
+## Bounded daily-answer maintenance
+
+The local question guide now distinguishes scientific uses of `test` from student
+assessments while retaining source-backed lab arrangements. Upcoming answers check
+both window bounds, overlapping sessions, date-only uncertainty and conflicting dates.
+This is a Skill instruction change; it does not repair stored event classifications
+or increase content coverage. The installed Skill links to the checkout, so the guide
+is available without reinstalling the unchanged Python package.
+
+The takeover check at `f268e8e` verified installed/source Python file equality, CLI
+help and cache-only library status (no errors, no refresh; incomplete coverage remains
+explicit). No full suite, live acceptance or remote download was repeated. Skill
+entrypoint/reference checks and diff whitespace validation passed. The bundled Skill
+validator passed after adding PyYAML to the locked development dependencies and
+installing them in the isolated project environment with `uv sync --frozen --extra dev`.
+Validation used `uv run --no-sync python /path/to/skill-creator/scripts/quick_validate.py
+skills/ntulearn`; the validator is supplied by the host's skill-creator installation.
+Independent read-only review passed the guide diff and seven synthetic evidence
+scenarios covering classification, time boundaries, overlap and conflicts. This
+instruction-level check is not a new real-course extraction evaluation.

@@ -73,6 +73,20 @@ agree. Report differing dates, times, locations or requirements even when the ev
 projection has no conflict entry; unresolved candidates and unextracted text can still
 contain a disagreement. Keep this check bounded to the selected course and relevant material.
 
+Before presenting an assessment, inspect the original passage and nearby context to
+establish what is being assessed. A lexical `test` hit or projected `TEST` type alone
+does not establish a student test: it may describe testing a device, a laboratory
+procedure, or a statistical test. Exclude those meanings from the assessment list;
+when the context is insufficient, say the classification is unconfirmed. Preserve any
+separately supported lab session, time, location, report deadline, or viva, and label it
+according to the source. An exact date does not resolve an uncertain classification.
+
+Synthetic examples: “Build and test a sensor circuit” is an experimental instruction,
+not evidence of an exam. “Lab session on 14 September 2037 at 14:00 in Room Z;
+test the sensor circuit” supports a lab arrangement, not a student test. “Term Test 1
+on 14 September 2037” supports a source-stated assessment. A bare “test” without
+enough context remains unclassified.
+
 ## Present an upcoming window conservatively
 
 Do not describe every item returned by `upcoming` as confirmed inside the requested
@@ -86,8 +100,14 @@ presenting it.
   calling it confirmed. Otherwise label it as a source-stated arrangement or preview.
 - For `DATE_ONLY` inside the requested calendar-date range, say the date is known and
   the specific time is unconfirmed. Do not invent a timezone.
-- If an exact instant or source date is clearly before the requested window, omit it
-  from the main upcoming list or label it as past evidence.
+- Use the requested window's actual bounds: `[since, until)` includes `since` and
+  excludes `until`. If all relevant temporal evidence places an item before the
+  window or at/after its upper bound, omit it from the main upcoming list or label
+  it as outside the window. Check both ends of a duration: a session starting before
+  `since` may still overlap. Do not silently discard an unresolved alternative or
+  unknown time just because one known date lies outside the window. A `DATE_ONLY`
+  value cannot decide membership across a boundary partway through that day;
+  explain the boundary uncertainty instead of inventing a time.
 - Put `WEEK_ONLY`, `UNKNOWN`, and a `local_time` without a source date in a separate
   “时间未定位” group. Quote the retained source wording and never claim it falls within
   the next N days.
@@ -95,9 +115,12 @@ presenting it.
   the convenient date.
 
 Synthetic example for a request covering `[D, D+7)`: an exact `D+2` deadline is
-inside the window but still needs source verification; a source date `D-1` is past; `Week 4` and `14:00` without a date are both
-“时间未定位”. The latter two remain visible because the Core result is conservative,
-not because their membership in the seven-day window was established.
+inside the window but still needs source verification; a deadline with only a source
+date on the day before `D` is past; an exact deadline at `D+7` is outside the window.
+`Week 4` and `14:00` without a date are both “时间未定位”. The latter two remain
+visible because the Core result is conservative, not because their membership in
+the seven-day window was established. Conflicting deadlines at `D+2` and `D+8`
+must remain a disclosed conflict, not a selected in-window deadline.
 
 ## Empty events and evidence fallbacks
 

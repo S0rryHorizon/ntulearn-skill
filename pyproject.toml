@@ -34,6 +34,7 @@ dev = [
   "pip-licenses>=5.0",
   "pytest>=8",
   "pytest-socket>=0.7",
+  "PyYAML>=6,<7",
   "reportlab>=4.2",
   "ruff>=0.6",
 ]
