@@ -83,9 +83,30 @@ A **simulated** expired capture returned `session_expired`; original bytes and t
 of versions, parses and events were unchanged. This does not validate real SSO expiry.
 Cached search remained usable afterward, with failed-coverage warnings retained.
 
-The last native browser-tool check reported that the Mac was locked and required manual
-unlock. Therefore a second fresh browser download and cross-capture hash verification
-remain pending. No alternate download channel was attempted. Source, host-entry and
+After manual Mac unlock, the normal Chrome course UI loaded without a login prompt.
+A second original PDF was downloaded through the content item's normal download menu
+and native Save dialog into a new private bundle. The installed CLI's targeted
+`fetch --verify` returned `REUSED_VERIFIED`, `binary_changed=false`: both actual
+browser downloads and the stored original have the same SHA-256. Verification time
+advanced to the new capture. The immutable version record was unchanged; counts of
+parses, candidates, events, Claims and jobs were unchanged. The same four logical search hits and
+physical page 5 source survived in new CLI processes. Replaying this second capture
+returned `NOT_NEEDED` with the explicit not-reverified warning. A fresh cache-only
+check with this same configuration recorded zero socket calls and no browser action.
+
+Only the selected course/resource labels and file were re-observed; announcement and
+assessment scopes in the second bundle are UNKNOWN. The existing parent-folder identity
+was retained from the earlier mapping, not claimed as a newly read opaque ID. Targeted
+fetch did not reimport the content tree. The resource fetch returned COMPLETE, but
+cached search still reports FAILED coverage inherited from the earlier simulated
+source failure and incomplete source scopes, while retaining its results. It must not
+be described as a complete course refresh. The locked-screen download blocker is resolved.
+
+During this continuation a browser-tab inspection returned `Debugger unattached`;
+normal native Chrome UI inspection and download remained available. The supported
+native interface was used; no alternate network executor was introduced.
+
+Source, host-entry and
 extraction and incremental index changes passed independent critical review. The installed
 entry exposed a derived-index bug: refreshing a resource dropped its event/Claim search
 rows while canonical data remained intact. The repair refreshes all projections for each

@@ -136,6 +136,8 @@ retrieval and same-capture reuse checks. Repeated sync preserves resource-backed
 and Claim search projections; simulated capture expiry preserves cached data. This does
 not validate real SSO expiry. This bounded observation does not promote
 large-list pagination, all courses, all formats or the raw API translator to validated.
-The second fresh download is pending manual Mac unlock; integrated acceptance remains
-open. Private extraction evaluation and its remaining visual/context limits are recorded
+A second normal browser download passed targeted hash-verified reuse, preserving the
+immutable version, derived counts and source locators. The lock blocker is resolved.
+Aggregate coverage and raw API validation remain open. Private extraction evaluation
+and its remaining visual/context limits are recorded
 in the follow-up rather than inferred from synthetic parser success.
