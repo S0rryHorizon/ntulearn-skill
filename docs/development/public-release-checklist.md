@@ -13,11 +13,12 @@ open.
 The R1/R2 follow-up uses `ae40a3c` as its comparison baseline. Earlier PASS entries
 below describe their recorded versions and scope, not a new full-suite or live run.
 
-- [ ] R2: designate a maintainer-controlled private reporting address, or establish
-  the repository and enable GitHub private vulnerability reporting, then document
-  the actual channel in `SECURITY.md`. No channel is currently designated or enabled;
-  public issues and pull requests are not a substitute for private vulnerability
-  details. Repository creation and external feature enablement are outside this batch.
+- [ ] R2: GitHub Private vulnerability reporting is the maintainer-selected channel.
+  Establish the repository, enable the feature and verify its reporting entry on
+  the Security page before publication. The workflow is documented in `SECURITY.md`,
+  but the feature is not yet enabled and R2 remains pending. Public issues and pull
+  requests are not a substitute for private vulnerability details. Repository creation
+  and external feature enablement are outside this batch.
 - [ ] R3–R6: retained for a later scoped review; no implementation or completion
   claim is included in the R1/R2 follow-up.
 

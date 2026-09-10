@@ -110,9 +110,10 @@ unverifiable boundaries with bounded errors. Direct database paths also validate
 their containing directory to protect SQLite sidecars. No ignore rules or existing
 private data are modified by boundary validation.
 
-R2 remains a publication blocker until a maintainer-controlled private reporting
-channel is designated and documented. No address has been supplied and no GitHub
-private reporting feature has been enabled. Ordinary non-sensitive issues and pull
+The maintainer selected GitHub Private vulnerability reporting for R2. Its workflow
+is documented, but R2 remains a publication blocker until the repository exists,
+the feature is enabled and its reporting entry is verified. No GitHub private
+reporting feature has been enabled. Ordinary non-sensitive issues and pull
 requests remain appropriate; private vulnerability details need a private channel.
 R3–R6 remain deferred and are not implemented by this follow-up.
 

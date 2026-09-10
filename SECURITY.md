@@ -9,18 +9,24 @@ made for unpublished versions.
 
 ## Reporting a vulnerability
 
-**Public-release blocker: no designated private reporting channel is available yet.**
-A maintainer-controlled reporting address or an enabled GitHub private vulnerability
-reporting channel must be established and documented before publication. This source
-tree does not claim that either channel is currently available.
+**Public-release blocker: GitHub Private vulnerability reporting is selected but
+not yet enabled.** Before publication, the maintainer must establish the repository,
+enable the feature and verify that its Security page offers the reporting entry.
+The following reporting workflow applies once those steps are complete.
 
-Once a public repository exists, ordinary bugs, feature requests and non-sensitive
-contributions can use its issues and pull requests. Suspected vulnerabilities that
-would disclose an unpatched exploit should use the designated private channel. Until
-that channel is available, an issue may ask for a security contact without disclosing
-the vulnerability details. Never put credentials, authenticated URLs, private course
-information, logs, database content or real NTULearn reproduction artifacts in public
-issues or pull requests.
+For ordinary bugs, feature requests, and non-sensitive fixes, please open a public
+issue or pull request.
+
+If you discover a security vulnerability that has not yet been fixed, please do not
+disclose the details in a public issue or pull request. Instead, use GitHub's
+**Private vulnerability reporting** feature from the repository's **Security** page.
+Until that feature is available, a public issue may ask for a security contact
+without disclosing the vulnerability details.
+
+Please avoid including real credentials, private data, or other unnecessary sensitive
+information in the report. Never include credentials, private data, authenticated
+URLs, private course materials, logs, database content or real NTULearn reproduction
+artifacts in public issues or pull requests.
 
 Include a concise impact description, the affected revision, synthetic reproduction
 steps and any proposed mitigation. Replace all real identifiers and content with invented
