@@ -198,6 +198,7 @@ def test_explicit_sync_window_and_policy_are_typed_before_one_core_call() -> Non
             "window_until": "2030-02-01T00:00:00+00:00",
             "fetch_resources": False,
             "verify_resources": True,
+            "max_jobs": 256,
         },
     )
 
@@ -209,6 +210,7 @@ def test_explicit_sync_window_and_policy_are_typed_before_one_core_call() -> Non
     assert arguments[1].window.since == datetime(2030, 1, 1, tzinfo=UTC)
     assert arguments[1].window.until == datetime(2030, 2, 1, tzinfo=UTC)
     assert not arguments[1].fetch_resources and arguments[1].verify_resources
+    assert arguments[1].max_jobs == 256
 
 
 def test_manual_field_and_identity_requests_delegate_as_typed_core_decisions() -> None:

@@ -36,6 +36,8 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 TOOL_NAMES = (
     "list_courses",
     "list_materials",
+    "get_library_status",
+    "get_recent_material_changes",
     "search",
     "get_announcements",
     "get_assessments",
@@ -238,6 +240,36 @@ class CodexToolDispatcher:
                     _freshness(arguments.get("freshness")),
                 ),
             )
+        if tool_name == "get_library_status":
+            arguments = _arguments(
+                raw_arguments,
+                allowed=frozenset({"course_key", "freshness"}),
+            )
+            course_value = arguments.get("course_key")
+            return cast(
+                ResultEnvelope[object],
+                self._service.get_library_status(
+                    None if course_value is None else _course(course_value),
+                    _freshness(arguments.get("freshness")),
+                ),
+            )
+        if tool_name == "get_recent_material_changes":
+            arguments = _arguments(
+                raw_arguments,
+                allowed=frozenset(
+                    {"course_key", "window_since", "window_until", "limit", "freshness"}
+                ),
+                required=frozenset({"course_key", "window_since", "window_until"}),
+            )
+            return cast(
+                ResultEnvelope[object],
+                self._service.get_recent_material_changes(
+                    _course(arguments["course_key"]),
+                    _window(arguments),
+                    _freshness(arguments.get("freshness")),
+                    limit=_integer(arguments.get("limit", 100), maximum=100),
+                ),
+            )
         if tool_name == "search":
             arguments = _arguments(
                 raw_arguments,
@@ -333,6 +365,7 @@ class CodexToolDispatcher:
                 "window_until",
                 "fetch_resources",
                 "verify_resources",
+                "max_jobs",
             }
             if tool_name != "sync_all":
                 allowed.add("course_key")
@@ -349,6 +382,7 @@ class CodexToolDispatcher:
                 window=_window(arguments),
                 fetch_resources=_boolean(arguments.get("fetch_resources", True)),
                 verify_resources=_boolean(arguments.get("verify_resources", False)),
+                max_jobs=_integer(arguments.get("max_jobs", 64), maximum=10_000),
             )
             if tool_name == "sync_all":
                 return self._service.sync_all(policy)

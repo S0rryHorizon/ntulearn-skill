@@ -31,6 +31,7 @@ class SearchTextOrigin(StrEnum):
 class SourceReferenceKind(StrEnum):
     SOURCE_OBJECT = "source_object"
     SOURCE_OBSERVATION = "source_observation"
+    RESOURCE_OBSERVATION = "resource_observation"
     SOURCE_LOCATOR = "source_locator"
 
 

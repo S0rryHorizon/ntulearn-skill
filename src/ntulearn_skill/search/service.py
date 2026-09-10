@@ -223,6 +223,47 @@ class SearchService:
                     json.loads(str(row["snapshot_json"])),
                 )
 
+            if reference.kind is SourceReferenceKind.RESOURCE_OBSERVATION:
+                row = connection.execute(
+                    """SELECT provider.name AS provider, object.object_kind, object.remote_key,
+                              observation.version_key, observation.observation_status,
+                              observation.original_filename,
+                              observation.sanitized_metadata_json,
+                              observation.candidate_modified_at,
+                              observation.candidate_revision,
+                              observation.availability, observation.observed_at,
+                              observation.fetch_decision
+                    FROM resource_observation observation
+                    JOIN resource ON resource.resource_key = observation.resource_key
+                    JOIN source_object object
+                      ON object.source_object_key = resource.source_object_key
+                    JOIN source_provider provider ON provider.provider_key = object.provider_key
+                    WHERE observation.observation_key = ?""",
+                    (reference.key,),
+                ).fetchone()
+                if row is None:
+                    raise SourceResolutionError("local resource observation was not found")
+                observation = {
+                    "observation_status": str(row["observation_status"]),
+                    "original_filename": str(row["original_filename"]),
+                    "sanitized_metadata": json.loads(str(row["sanitized_metadata_json"])),
+                    "candidate_modified_at": row["candidate_modified_at"],
+                    "candidate_revision": row["candidate_revision"],
+                    "availability": str(row["availability"]),
+                    "observed_at": str(row["observed_at"]),
+                    "fetch_decision": str(row["fetch_decision"]),
+                }
+                return ResolvedSource(
+                    reference,
+                    str(row["provider"]),
+                    str(row["object_kind"]),
+                    str(row["remote_key"]),
+                    None if row["version_key"] is None else int(row["version_key"]),
+                    None,
+                    (),
+                    observation,
+                )
+
             row = connection.execute(
                 """
                 SELECT locator.version_key, locator.chunk_key, locator.structured_json,

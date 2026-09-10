@@ -25,6 +25,7 @@ from ntulearn_skill.core.models import (
     Coverage,
     TemporalPrecision,
     from_storage_time,
+    to_storage_time,
     utc_now,
 )
 from ntulearn_skill.core.results import (
@@ -267,6 +268,39 @@ class MaterialSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class LibraryStatus:
+    course_key: int
+    course: CourseId
+    code: str
+    title: str
+    content_nodes: int
+    discovered_materials: int
+    downloaded_materials: int
+    parsed_materials: int
+    completely_parsed_materials: int
+    indexed_chunks: int
+    total_local_jobs: int
+    succeeded_local_jobs: int
+    pending_local_jobs: int
+    running_local_jobs: int
+    failed_local_jobs: int
+    last_material_observed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialChangeView:
+    resource_key: int
+    observation_key: int
+    course: CourseId
+    display_title: str
+    observed_at: datetime
+    change_kinds: tuple[str, ...]
+    version_key: int | None
+    previous_version_key: int | None
+    candidate_modified_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class AnnouncementView:
     local_key: int
     announcement_id: str
@@ -417,6 +451,121 @@ class CoreService:
             )
         except Exception as error:
             return self._failure(operation, error, "materials")
+
+    def get_library_status(
+        self,
+        course: CourseRef | None = None,
+        freshness: FreshnessRequirement = FreshnessRequirement.cache_only(),
+    ) -> ResultEnvelope[LibraryStatus]:
+        """Report bounded local discovery/download/parse/index progress by course."""
+
+        operation = "get_library_status"
+        try:
+            providers = self._providers()
+            if not providers and self.sync_engine is not None:
+                providers = (self.sync_engine.source.provider_name,)
+            if course is None:
+                selected = self._course_id_rows(None)
+                initial_course_ids = frozenset(item for item, _key in selected)
+                scopes = tuple(
+                    ScopeKey(provider, None, "courses") for provider in providers
+                ) + tuple(ScopeKey(item.provider, item, "content") for item, _key in selected)
+
+                def current_courses() -> tuple[tuple[CourseId, int], ...]:
+                    return self._course_id_rows(None)
+
+                def coverage() -> tuple[CoverageView, ...]:
+                    return tuple(
+                        view
+                        for item, key in current_courses()
+                        for view in (
+                            (self._parse_coverage(item, key),)
+                            if item in initial_course_ids
+                            else (
+                                CoverageView(
+                                    item.provider,
+                                    "content",
+                                    Coverage.UNKNOWN,
+                                    item,
+                                    evidence="discovered_during_query_freshness_unchecked",
+                                ),
+                                self._parse_coverage(item, key),
+                            )
+                        )
+                    )
+
+            else:
+                selected = (self._course(course),)
+                scopes = (ScopeKey(selected[0][0].provider, selected[0][0], "content"),)
+
+                def current_courses() -> tuple[tuple[CourseId, int], ...]:
+                    return selected
+
+                def coverage() -> tuple[CoverageView, ...]:
+                    return tuple(self._parse_coverage(item, key) for item, key in current_courses())
+
+            return self._query(
+                operation,
+                lambda: self._load_library_status(current_courses()),
+                scopes,
+                freshness,
+                bounded_limit=_DEFAULT_LIMIT,
+                extra_coverage=coverage,
+                extra_warnings=lambda: (
+                    SafeWarning(
+                        "content_page_body_coverage_unavailable",
+                        "Library progress covers content metadata and file-backed text; "
+                        "non-file content page bodies are not established as indexed.",
+                        "library_status",
+                    ),
+                ),
+            )
+        except Exception as error:
+            return self._failure(operation, error, "library_status")
+
+    def get_recent_material_changes(
+        self,
+        course: CourseRef,
+        window: TimeWindow,
+        freshness: FreshnessRequirement = FreshnessRequirement.cache_only(),
+        *,
+        limit: int = _DEFAULT_LIMIT,
+    ) -> ResultEnvelope[MaterialChangeView]:
+        """Return changes proven by resource observations inside a bounded window."""
+
+        operation = "get_recent_material_changes"
+        try:
+            if not isinstance(window, TimeWindow):
+                raise TypeError("material change window must be typed")
+            _bounded_limit(limit)
+            course_id, course_key = self._course(course)
+            scope = ScopeKey(course_id.provider, course_id, "content")
+
+            def observation_coverage() -> tuple[CoverageView, ...]:
+                content = self._coverage(scope)
+                return (
+                    CoverageView(
+                        course_id.provider,
+                        "resource_observations",
+                        content.coverage,
+                        course_id,
+                        window.since,
+                        window.until,
+                        content.observed_at,
+                        "resource_observation_history",
+                    ),
+                )
+
+            return self._query(
+                operation,
+                lambda: self._load_recent_material_changes(course_id, course_key, window, limit),
+                (scope,),
+                freshness,
+                bounded_limit=limit,
+                extra_coverage=observation_coverage,
+            )
+        except Exception as error:
+            return self._failure(operation, error, "material_changes")
 
     def search(
         self,
@@ -1149,6 +1298,250 @@ class CoreService:
                 item.version_key,
             )
             for item, row in zip(items, rows, strict=True)
+        )
+        return items, provenance
+
+    def _load_library_status(
+        self, courses: tuple[tuple[CourseId, int], ...]
+    ) -> tuple[tuple[LibraryStatus, ...], tuple[ProvenanceView, ...]]:
+        if not courses:
+            return (), ()
+        keys = tuple(key for _course, key in courses)
+        placeholders = ",".join("?" for _ in keys)
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                f"""SELECT course.course_key, course.code, course.title,
+                    course_object.source_object_key,
+                    provider.name AS provider, course_object.remote_key,
+                    COUNT(DISTINCT content.content_key) AS content_nodes,
+                    COUNT(DISTINCT resource.resource_key) AS discovered_materials,
+                    COUNT(DISTINCT CASE WHEN resource.current_version_key IS NOT NULL
+                        THEN resource.resource_key END) AS downloaded_materials,
+                    COUNT(DISTINCT CASE WHEN parsed.status IN ('COMPLETE', 'PARTIAL')
+                        THEN resource.resource_key END) AS parsed_materials,
+                    COUNT(DISTINCT CASE WHEN parsed.status = 'COMPLETE'
+                                             AND parsed.coverage = 'COMPLETE'
+                        THEN resource.resource_key END) AS completely_parsed_materials,
+                    COUNT(DISTINCT CASE WHEN document.entity_kind = 'chunk'
+                        THEN document.search_document_key END) AS indexed_chunks,
+                    MAX(resource.last_observed_at) AS last_material_observed_at
+                FROM course
+                JOIN source_object course_object USING(source_object_key)
+                JOIN source_provider provider USING(provider_key)
+                LEFT JOIN content_node content ON content.course_key = course.course_key
+                LEFT JOIN resource ON resource.content_key = content.content_key
+                LEFT JOIN parsed_document parsed ON parsed.parse_key = (
+                    SELECT candidate.parse_key FROM parsed_document candidate
+                    WHERE candidate.version_key = resource.current_version_key
+                    ORDER BY candidate.parsed_at DESC, candidate.parse_key DESC LIMIT 1
+                )
+                LEFT JOIN search_document document
+                  ON document.resource_key = resource.resource_key
+                 AND document.version_key = resource.current_version_key
+                WHERE course.course_key IN ({placeholders})
+                GROUP BY course.course_key
+                ORDER BY course.code, course.title, course.course_key""",
+                keys,
+            ).fetchall()
+            version_courses = {
+                int(row["version_key"]): int(row["course_key"])
+                for row in connection.execute(
+                    f"""SELECT version.version_key, content.course_key
+                    FROM resource_version version
+                    JOIN resource USING(resource_key)
+                    JOIN content_node content USING(content_key)
+                    WHERE content.course_key IN ({placeholders})""",
+                    keys,
+                )
+            }
+            observation_courses = {
+                int(row["observation_key"]): int(row["course_key"])
+                for row in connection.execute(
+                    f"""SELECT observation.observation_key, owner.course_key
+                    FROM source_observation observation
+                    JOIN (
+                        SELECT source_object_key, course_key FROM announcement
+                        UNION ALL SELECT source_object_key, course_key FROM assessment
+                        UNION ALL SELECT source_object_key, course_key FROM schedule_item
+                        UNION ALL SELECT source_object_key, course_key FROM due_item
+                    ) owner ON owner.source_object_key = observation.source_object_key
+                    WHERE owner.course_key IN ({placeholders})""",
+                    keys,
+                )
+            }
+            job_counts: dict[int, dict[str, int]] = {
+                key: {
+                    status: 0 for status in ("TOTAL", "SUCCEEDED", "PENDING", "RUNNING", "FAILED")
+                }
+                for key in keys
+            }
+            for job in connection.execute("SELECT status, payload_json FROM local_job"):
+                payload = json.loads(str(job["payload_json"]))
+                owner: object = payload.get("course_key")
+                if owner is None and "version_key" in payload:
+                    owner = version_courses.get(payload["version_key"])
+                if owner is None and "observation_key" in payload:
+                    owner = observation_courses.get(payload["observation_key"])
+                if isinstance(owner, bool) or not isinstance(owner, int) or owner not in job_counts:
+                    continue
+                status = str(job["status"])
+                job_counts[owner]["TOTAL"] += 1
+                job_counts[owner][status] += 1
+        finally:
+            connection.close()
+        items = tuple(
+            LibraryStatus(
+                int(row["course_key"]),
+                CourseId(str(row["provider"]), str(row["remote_key"])),
+                str(row["code"]),
+                str(row["title"]),
+                int(row["content_nodes"]),
+                int(row["discovered_materials"]),
+                int(row["downloaded_materials"]),
+                int(row["parsed_materials"]),
+                int(row["completely_parsed_materials"]),
+                int(row["indexed_chunks"]),
+                job_counts[int(row["course_key"])]["TOTAL"],
+                job_counts[int(row["course_key"])]["SUCCEEDED"],
+                job_counts[int(row["course_key"])]["PENDING"],
+                job_counts[int(row["course_key"])]["RUNNING"],
+                job_counts[int(row["course_key"])]["FAILED"],
+                None
+                if row["last_material_observed_at"] is None
+                else from_storage_time(str(row["last_material_observed_at"])),
+            )
+            for row in rows
+        )
+        provenance = tuple(
+            ProvenanceView(
+                "source_object",
+                int(row["source_object_key"]),
+                item.course.provider,
+                item.course,
+            )
+            for item, row in zip(items, rows, strict=True)
+        )
+        return items, provenance
+
+    def _load_recent_material_changes(
+        self,
+        course: CourseId,
+        course_key: int,
+        window: TimeWindow,
+        limit: int,
+    ) -> tuple[tuple[MaterialChangeView, ...], tuple[ProvenanceView, ...]]:
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                """WITH history AS (
+                    SELECT observation.*,
+                        LAG(observation.observation_key) OVER ordering AS previous_observation_key,
+                        LAG(observation.metadata_fingerprint) OVER ordering
+                            AS previous_metadata_fingerprint,
+                        LAG(observation.observation_status) OVER ordering
+                            AS previous_observation_status,
+                        LAG(observation.availability) OVER ordering AS previous_availability,
+                        (
+                            SELECT previous.version_key
+                            FROM resource_observation previous
+                            WHERE previous.resource_key = observation.resource_key
+                              AND previous.version_key IS NOT NULL
+                              AND (
+                                previous.observed_at < observation.observed_at
+                                OR (
+                                  previous.observed_at = observation.observed_at
+                                  AND previous.sync_run_key < observation.sync_run_key
+                                )
+                                OR (
+                                  previous.observed_at = observation.observed_at
+                                  AND previous.sync_run_key = observation.sync_run_key
+                                  AND previous.observation_key < observation.observation_key
+                                )
+                              )
+                            ORDER BY previous.observed_at DESC, previous.sync_run_key DESC,
+                                     previous.observation_key DESC
+                            LIMIT 1
+                        ) AS previous_version_key
+                    FROM resource_observation observation
+                    WINDOW ordering AS (
+                        PARTITION BY observation.resource_key
+                        ORDER BY observation.observed_at, observation.sync_run_key,
+                                 observation.observation_key
+                    )
+                )
+                SELECT history.*, resource.display_title, resource.source_object_key
+                FROM history
+                JOIN resource USING(resource_key)
+                JOIN content_node content USING(content_key)
+                WHERE content.course_key = ?
+                  AND history.observed_at >= ? AND history.observed_at < ?
+                  AND (
+                    history.previous_observation_key IS NULL
+                    OR history.metadata_fingerprint <> history.previous_metadata_fingerprint
+                    OR history.observation_status <> history.previous_observation_status
+                    OR history.availability <> history.previous_availability
+                    OR (
+                        history.version_key IS NOT NULL
+                        AND history.version_key IS NOT history.previous_version_key
+                    )
+                  )
+                ORDER BY history.observed_at DESC, history.observation_key DESC
+                LIMIT ?""",
+                (
+                    course_key,
+                    to_storage_time(window.since),
+                    to_storage_time(window.until),
+                    limit,
+                ),
+            ).fetchall()
+        finally:
+            connection.close()
+
+        def kinds(row: sqlite3.Row) -> tuple[str, ...]:
+            if row["previous_observation_key"] is None:
+                return (
+                    "FIRST_OBSERVED"
+                    if str(row["observation_status"]) == "OBSERVED"
+                    else "FIRST_RECORDED",
+                )
+            values: list[str] = []
+            if row["version_key"] is not None and row["version_key"] != row["previous_version_key"]:
+                values.append(
+                    "BINARY_AVAILABLE" if row["previous_version_key"] is None else "BINARY_CHANGED"
+                )
+            if row["metadata_fingerprint"] != row["previous_metadata_fingerprint"]:
+                values.append("METADATA_CHANGED")
+            if (
+                row["observation_status"] != row["previous_observation_status"]
+                or row["availability"] != row["previous_availability"]
+            ):
+                values.append("AVAILABILITY_CHANGED")
+            return tuple(values)
+
+        items = tuple(
+            MaterialChangeView(
+                int(row["resource_key"]),
+                int(row["observation_key"]),
+                course,
+                str(row["display_title"]),
+                from_storage_time(str(row["observed_at"])),
+                kinds(row),
+                None if row["version_key"] is None else int(row["version_key"]),
+                None if row["previous_version_key"] is None else int(row["previous_version_key"]),
+                None if row["candidate_modified_at"] is None else str(row["candidate_modified_at"]),
+            )
+            for row in rows
+        )
+        provenance = tuple(
+            ProvenanceView(
+                "resource_observation",
+                item.observation_key,
+                course.provider,
+                course,
+                item.version_key,
+            )
+            for item in items
         )
         return items, provenance
 
@@ -2141,6 +2534,8 @@ __all__ = [
     "CourseRef",
     "CourseSummary",
     "EventFilter",
+    "LibraryStatus",
+    "MaterialChangeView",
     "MaterialFilter",
     "MaterialSummary",
     "ResourceRef",

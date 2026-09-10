@@ -39,6 +39,7 @@ by previous commands, not remote NTULearn identifiers.
 
 ```text
 ntulearn --root PRIVATE_ROOT --browser-capture PRIVATE_MANIFEST sync
+ntulearn --root PRIVATE_ROOT --browser-capture PRIVATE_MANIFEST sync --max-jobs 256
 ntulearn --root PRIVATE_ROOT courses
 ntulearn --root PRIVATE_ROOT materials COURSE_KEY
 ntulearn --root PRIVATE_ROOT search "search words" --course COURSE_KEY --freshness cache-only

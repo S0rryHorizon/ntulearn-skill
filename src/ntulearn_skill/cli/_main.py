@@ -33,6 +33,8 @@ _KNOWN_COMMANDS = frozenset(
     {
         "courses",
         "materials",
+        "library-status",
+        "recent-materials",
         "search",
         "announcements",
         "assessments",
@@ -170,6 +172,17 @@ def _dispatch(
         return service.list_courses(CourseFilter(), _freshness(args))
     if command == "materials":
         return service.list_materials(_course(args.course_key), MaterialFilter(), _freshness(args))
+    if command == "library-status":
+        course = None if args.course_key is None else _course(args.course_key)
+        return service.get_library_status(course, _freshness(args))
+    if command == "recent-materials":
+        until = now().astimezone(UTC)
+        return service.get_recent_material_changes(
+            _course(args.course_key),
+            TimeWindow(until - timedelta(days=args.days), until),
+            _freshness(args),
+            limit=args.limit,
+        )
     if command == "search":
         query = _search_query(args)
         if args.course_key is None:
@@ -216,6 +229,7 @@ def _dispatch(
             ),
             fetch_resources=not args.no_fetch,
             verify_resources=args.verify,
+            max_jobs=args.max_jobs,
         )
         course = None if args.course_key is None else _course(args.course_key)
         if args.quick:

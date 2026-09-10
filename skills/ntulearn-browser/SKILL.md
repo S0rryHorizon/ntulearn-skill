@@ -6,6 +6,8 @@ description: Synchronize a bounded NTULearn course through the connected Codex b
 # NTULearn browser connection
 
 Use this host workflow when the user requests NTULearn synchronization or retrieval.
+For an ordinary question that should use only the existing private local library, use
+the separate `ntulearn` skill first; this browser skill is the fresh-observation path.
 Read [the browser guide](../../docs/usage-browser.md) and
 [capture contract](../../docs/browser-capture-contract.md) for CLI installation and
 accepted input. These links require the source checkout or source distribution; if

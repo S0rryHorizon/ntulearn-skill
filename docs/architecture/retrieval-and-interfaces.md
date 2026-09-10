@@ -67,6 +67,8 @@ sync_all(policy) -> SyncResult
 fetch_resource(resource: ResourceRef, verify) -> ResourceVersionResult
 
 list_materials(course: CourseRef, filter, freshness) -> QueryResult[MaterialSummary]
+get_library_status(course, freshness) -> QueryResult[LibraryStatus]
+get_recent_material_changes(course, window, freshness) -> QueryResult[MaterialChangeView]
 get_resource(resource: ResourceRef, version, include_local_path) -> ResourceResult
 
 search(query: SearchQuery) -> QueryResult[SearchHit]
@@ -122,6 +124,8 @@ ntulearn search "quiz"
 ntulearn search "presentation duration" --course PH0000
 
 ntulearn materials PH0000
+ntulearn library-status --course PH0000
+ntulearn recent-materials PH0000 --days 14
 ntulearn source <local-locator>
 ```
 
@@ -145,6 +149,11 @@ AI question
 They do not manage authentication, call NTULearn endpoints, parse files, maintain indexes, or
 reconcile events. They must preserve uncertainty in their wording and cite locators returned by the
 core. If integration formats change, the source and core layers remain unchanged.
+
+A natural-language skill may decompose a bounded Chinese or English question into several existing
+typed calls and transparent lexical searches. That adapter behavior is not a new Core service and
+must not be presented as general NLP. Recent-material answers use resource observation deltas;
+parse or index replay timestamps do not establish a source update.
 
 ## Source-agnostic extension boundary
 

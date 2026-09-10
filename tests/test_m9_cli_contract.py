@@ -261,6 +261,7 @@ def test_usage_error_is_json_safe_and_does_not_reflect_private_input() -> None:
             "private-invalid-field",
         ),
         (["--json", "upcoming", "--days", "100000000000000000000"], "100000000000000000000"),
+        (["--json", "sync", "1", "--max-jobs", "10001"], "10001"),
     ],
 )
 def test_semantic_usage_errors_precede_runtime_setup_and_do_not_reflect_input(
@@ -324,6 +325,24 @@ def test_sync_uses_the_documented_bounded_default_window() -> None:
     assert isinstance(policy, SyncPolicy)
     assert policy.window.since == NOW - timedelta(days=30)
     assert policy.window.until == NOW + timedelta(days=365)
+
+
+def test_sync_forwards_a_bounded_local_job_budget() -> None:
+    service = _Service(_result())
+
+    assert (
+        run(
+            ["sync", "1", "--max-jobs", "256"],
+            service=service,
+            stdout=io.StringIO(),
+            now=lambda: NOW,
+        )
+        == EXIT_COMPLETE
+    )
+
+    policy = service.calls[0][1][1]
+    assert isinstance(policy, SyncPolicy)
+    assert policy.max_jobs == 256
 
 
 def test_help_documents_the_exit_code_contract() -> None:

@@ -69,7 +69,9 @@ Start by listing courses so later commands can use returned `local_key` values:
 
 ```console
 ntulearn --json courses
+ntulearn library-status --course 1 --freshness cache-only
 ntulearn materials 1 --freshness cache-only
+ntulearn recent-materials 1 --days 14 --freshness cache-only
 ntulearn search "synthetic interference" --course 1 --limit 20 --neighbors 1
 ntulearn announcements 1
 ntulearn assessments 1
@@ -86,6 +88,30 @@ the invented code `PH0000`, but commands still use its returned integer `local_k
 
 `resource --include-local-path` is the only CLI query that opts into returning a private
 filesystem path. Avoid it in shared logs or agent output.
+
+`library-status` reports local content-node, material, download, parse, indexed-chunk,
+and per-course local-job status counts. The file-backed counts are progress denominators,
+not a claim that every normal
+content page or folder description was captured. The current browser capture contract
+does not establish body-text coverage for those non-file pages, so the result carries a
+`content_page_body_coverage_unavailable` warning.
+
+`recent-materials` compares timestamped resource observations within the requested
+window to each resource's preceding observation. It omits identical re-observations and
+reports explicit `FIRST_OBSERVED`, `FIRST_RECORDED`, `METADATA_CHANGED`, `BINARY_AVAILABLE`,
+`BINARY_CHANGED`, or `AVAILABILITY_CHANGED` evidence. An empty result means no changed
+resource observation was recorded locally in that window; it does not prove that the
+remote site had no changes between observations. Its provenance keys can be inspected
+with `source --kind resource_observation`.
+
+### Install the local question skill
+
+The Python wheel installs the Core and CLI, while Codex skills are installed separately.
+Copy or link `skills/ntulearn` into the Codex skills location, normally
+`~/.codex/skills/ntulearn`, then reload skills or start a new Codex task. Install
+`skills/ntulearn-browser` as well only when fresh browser-assisted observation is wanted.
+The local skill documents resumable course selection and transparent Chinese/English
+lexical decomposition; it does not add an LLM or semantic-search service to Core.
 
 ### Freshness
 
@@ -144,9 +170,17 @@ The CLI grammar includes explicit read-only sync and fetch commands:
 ```console
 ntulearn sync 1 --quick --no-fetch
 ntulearn sync 1 --verify
+ntulearn sync 1 --max-jobs 256
 ntulearn sync
 ntulearn fetch 3 --verify
 ```
+
+`--max-jobs N` sets the existing Core `SyncPolicy.max_jobs` bound for local
+parse/index/extract/reconcile work in that run. The CLI accepts `1` through `10000` and
+defaults to `64`. A larger selected course can exceed the default; inspect
+`library-status --course COURSE_KEY`, then rerun the explicit sync with a suitable bound
+to resume the idempotent queue. The flag does not broaden source scope or make a
+cache-only query perform work.
 
 Without `--browser-capture`, the installed CLI creates a local `CoreService` without a
 source engine. In that default
@@ -156,6 +190,13 @@ configuration these commands fail safely with exit `1` and the code
 existing engine. See [browser-assisted use](usage-browser.md). The package includes
 no automatic SSO or browser credential extraction. The composition below is for a
 custom or raw API integration, not a requirement for ordinary browser-assisted use.
+
+Each sync run executes at most 64 queued local parse/index/extract/reconcile jobs by
+default. A selected course with many files can therefore finish source observation while
+local jobs remain. Re-run the same bounded sync to resume idempotent work, or pass
+`--max-jobs N` with a value from 1 through 10000. Check the selected course's
+`library-status` fields `pending_local_jobs`, `running_local_jobs`, and
+`failed_local_jobs`; a source sync success does not erase a failed local job.
 
 A host application can compose the implemented core with its own authorized providers.
 This example uses the actual constructor signatures while leaving authentication and
@@ -205,6 +246,8 @@ The main methods are:
 CoreService.from_runtime(root=None, *, sync_engine=None, browser_capture=None, initialize=True)
 list_courses(filter=CourseFilter(), freshness=cache_only())
 list_materials(course, filter=MaterialFilter(), freshness=cache_only())
+get_library_status(course=None, freshness=cache_only())
+get_recent_material_changes(course, window, freshness=cache_only(), *, limit=100)
 search(query, freshness=cache_only())
 search_course(course, query, freshness=cache_only())
 get_announcements(course, filter=AnnouncementFilter(), freshness=cache_only())
@@ -229,6 +272,10 @@ identity; the CLI deliberately exposes only local keys.
 `ntulearn_skill.integrations.codex.CodexToolDispatcher` validates a bounded mapping,
 calls one allowlisted core method and returns the same schema-versioned, path-redacted
 dictionary. It is useful when a host already knows how to register Python tools.
+
+The dispatcher exposes `get_library_status` and `get_recent_material_changes` as normal
+typed Core calls. Natural-language intent recognition and bilingual query decomposition
+remain in the Codex skill, so the Core does not pretend to implement general NLP.
 
 It is not an installed Codex plugin and does not provide tool registration, prompting,
 an agent runtime or a ChatGPT adapter. Those integrations remain host responsibilities or

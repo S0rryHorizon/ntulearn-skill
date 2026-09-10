@@ -37,6 +37,8 @@ _result_limit = _bounded_integer(minimum=1, maximum=100)
 _neighbor_count = _bounded_integer(minimum=0, maximum=5)
 _context_window = _bounded_integer(minimum=0, maximum=5)
 _upcoming_days = _bounded_integer(minimum=1, maximum=3650)
+_recent_days = _bounded_integer(minimum=1, maximum=3650)
+_sync_job_limit = _bounded_integer(minimum=1, maximum=10_000)
 _max_age_seconds = _bounded_integer(minimum=1, maximum=315_360_000)
 
 
@@ -91,6 +93,22 @@ def build_parser() -> SafeArgumentParser:
     materials.add_argument("course_key", type=_positive_key)
     _freshness_options(materials)
 
+    library = commands.add_parser(
+        "library-status", help="Show local material coverage and progress"
+    )
+    _common_options(library)
+    library.add_argument("--course", dest="course_key", type=_positive_key)
+    _freshness_options(library)
+
+    recent = commands.add_parser(
+        "recent-materials", help="List material changes recorded in recent observations"
+    )
+    _common_options(recent)
+    recent.add_argument("course_key", type=_positive_key)
+    recent.add_argument("--days", type=_recent_days, default=14)
+    recent.add_argument("--limit", type=_result_limit, default=100)
+    _freshness_options(recent)
+
     search = commands.add_parser("search", help="Search the deterministic local index")
     _common_options(search)
     search.add_argument("query")
@@ -127,7 +145,12 @@ def build_parser() -> SafeArgumentParser:
     source.add_argument("key", type=_positive_key)
     source.add_argument(
         "--kind",
-        choices=("source_object", "source_observation", "source_locator"),
+        choices=(
+            "source_object",
+            "source_observation",
+            "resource_observation",
+            "source_locator",
+        ),
         default="source_locator",
     )
     source.add_argument("--context-window", type=_context_window, default=1)
@@ -176,6 +199,12 @@ def build_parser() -> SafeArgumentParser:
     sync.add_argument("--quick", action="store_true")
     sync.add_argument("--verify", action="store_true")
     sync.add_argument("--no-fetch", action="store_true")
+    sync.add_argument(
+        "--max-jobs",
+        type=_sync_job_limit,
+        default=64,
+        help="Bound local parse/index/extract/reconcile work for this run (1-10000)",
+    )
 
     fetch = commands.add_parser("fetch", help="Fetch one explicitly selected resource")
     _common_options(fetch)

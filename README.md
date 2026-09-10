@@ -30,6 +30,8 @@ event evidence, conflicts and synchronization state under a private runtime root
 - A thin Python `CodexToolDispatcher` over the same core API.
 - A host browser capture provider wired into the normal Core/CLI, with a thin
   [Codex browser skill](skills/ntulearn-browser/SKILL.md) for authorized collection.
+- A separate [local question skill](skills/ntulearn/SKILL.md) for bounded Chinese or
+  English daily queries over the same cache-only Core interfaces.
 
 The Codex dispatcher is a Python integration surface. The browser skill requires a
 supported connected host; this repository does not install a browser plugin, run an
@@ -76,12 +78,18 @@ rejected unless it is explicitly below that checkout's ignored `.local/` directo
 
 ```console
 ntulearn --json courses
+ntulearn library-status --course 1 --freshness cache-only
 ntulearn materials 1 --freshness cache-only
+ntulearn recent-materials 1 --days 14 --freshness cache-only
 ntulearn search "synthetic optics" --course 1 --neighbors 1
 ntulearn events --course 1 --show-conflicts
 ntulearn source 7 --kind source_locator --context-window 1
 ntulearn resource 3
 ```
+
+For a selected course whose local processing exceeds the default 64-job run bound,
+`ntulearn sync 1 --max-jobs 256` resumes the existing idempotent queue. Use
+`library-status --course 1` to inspect remaining and failed local work.
 
 The integers are local opaque keys discovered from earlier results. They are not
 NTULearn IDs or course codes. For example, an invented course may display the code
