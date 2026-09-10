@@ -48,6 +48,7 @@ from ntulearn_skill.events import (
     ManualFieldResolution,
     ManualIdentityResolution,
 )
+from ntulearn_skill.events._activity import active_event_source_sql
 from ntulearn_skill.index import SearchIndex
 from ntulearn_skill.search import (
     SearchEntityKind,
@@ -2190,8 +2191,8 @@ class CoreService:
                       ON extraction.source_observation_key = equivalent.observation_key
                      AND extraction.input_kind = 'source_observation'
                     WHERE current.observation_key = ?
-                    ORDER BY (extraction.status = 'COMPLETE') DESC,
-                        extraction.extracted_at DESC,
+                      AND extraction.status IN ('COMPLETE', 'PARTIAL')
+                    ORDER BY extraction.extracted_at DESC,
                         extraction.extraction_record_key DESC
                     LIMIT 1""",
                     (int(row["observation_key"]),),
@@ -2232,10 +2233,12 @@ class CoreService:
         connection = self.database.connect()
         try:
             placeholders = ",".join("?" for _ in courses)
+            active_source = active_event_source_sql("event_source")
             row = connection.execute(
                 f"""SELECT 1 FROM event_source
                 WHERE course_key IN ({placeholders})
                   AND (event_key IS NULL OR resolution_state = 'UNRESOLVED')
+                  AND {active_source}
                 LIMIT 1""",
                 tuple(key for _, key in courses),
             ).fetchone()

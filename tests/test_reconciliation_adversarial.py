@@ -547,3 +547,90 @@ def test_reconciliation_is_idempotent_and_keeps_m6_evidence_immutable(tmp_path: 
                 ("tampered synthetic wording", observation_key),
             )
     assert harness.database.integrity_check()
+
+
+def test_unknown_structured_time_is_reflexive_without_fabricating_an_instant(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    observation = harness.repository.observe_assessment(
+        AssessmentSourceRecord(
+            AssessmentId("synthetic", "unknown-time-assessment"),
+            harness.first_course,
+            harness.first_content,
+            None,
+            "Synthetic presentation",
+            AssessmentSubtype.PRESENTATION,
+            "Synthetic evidence retains wording without a parseable date.",
+            Availability.ACTIVE,
+            due_at=SourceTime(
+                None,
+                "Time remains to be announced",
+                None,
+                TemporalPrecision.UNKNOWN,
+            ),
+        ),
+        sync_run_key=_sync_run(harness.database, 1),
+        observed_at=datetime(2030, 3, 1, 12, tzinfo=UTC),
+    )
+    extracted = harness.extractor.extract_observation(observation.observation.key)
+
+    result = harness.reconciler.reconcile_course(harness.first_course)
+
+    assert extracted.candidates
+    assert len(result.events) == 1
+    event = result.events[0]
+    due = event.field(CandidateFieldName.DUE_TIME)
+    assert due is not None
+    selected = next(claim for claim in event.claims if claim.key == due.selected_claim_key)
+    assert selected.decision_state is ClaimDecisionState.ACCEPTED
+    assert selected.precision is TemporalPrecision.UNKNOWN
+    assert due.value["instant"] is None
+    assert due.value.get("source_timezone") is None
+
+
+def test_identical_unknown_times_do_not_merge_unrelated_assessments(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    other_content = ContentId("synthetic", "unrelated-assessment-content")
+    DomainRepository(harness.database).put_content_node(
+        other_content,
+        course_id=harness.first_course,
+        handler_kind="assessment",
+        title="Synthetic unrelated assessment container",
+        position=1,
+    )
+    unknown_time = SourceTime(
+        None,
+        "Time remains to be announced",
+        None,
+        TemporalPrecision.UNKNOWN,
+    )
+    for ordinal, (remote_key, content) in enumerate(
+        (
+            ("unknown-time-one", harness.first_content),
+            ("unknown-time-two", other_content),
+        ),
+        start=1,
+    ):
+        observation = harness.repository.observe_assessment(
+            AssessmentSourceRecord(
+                AssessmentId("synthetic", remote_key),
+                harness.first_course,
+                content,
+                None,
+                "Synthetic presentation",
+                AssessmentSubtype.PRESENTATION,
+                "Synthetic evidence has no shared context.",
+                Availability.ACTIVE,
+                due_at=unknown_time,
+            ),
+            sync_run_key=_sync_run(harness.database, ordinal),
+            observed_at=datetime(2030, 3, ordinal, 12, tzinfo=UTC),
+        )
+        harness.extractor.extract_observation(observation.observation.key)
+
+    result = harness.reconciler.reconcile_course(harness.first_course)
+
+    assert len(result.events) == 1
+    assert result.events[0].source_count == 1
+    assert len(result.unresolved_sources) == 1

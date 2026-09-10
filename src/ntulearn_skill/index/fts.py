@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from ntulearn_skill.events._activity import active_claim_sql
 from ntulearn_skill.storage.database import Database, StorageError
 
 
@@ -396,8 +397,9 @@ class SearchIndex:
     def _insert_claims(connection: sqlite3.Connection, *, course_key: int | None = None) -> None:
         """Index each source claim against its own immutable evidence reference."""
 
+        active_claim = active_claim_sql("claim")
         connection.execute(
-            """
+            f"""
             INSERT INTO search_document(
                 entity_kind, entity_key, course_key, resource_key, version_key,
                 source_ref_kind, source_ref_key, course_code, course_title, content_title,
@@ -423,6 +425,7 @@ class SearchIndex:
             LEFT JOIN source_locator locator ON locator.locator_key = field.locator_key
             LEFT JOIN resource_version version ON version.version_key = locator.version_key
             WHERE claim.origin = 'SOURCE'
+              AND {active_claim}
               AND (? IS NULL OR course.course_key = ?)
             ORDER BY claim.claim_key
             """,

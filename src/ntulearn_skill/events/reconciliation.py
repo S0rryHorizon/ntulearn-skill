@@ -11,6 +11,11 @@ from typing import cast
 from ntulearn_skill.core import CourseId, TemporalPrecision
 from ntulearn_skill.core.identifiers import require_identifier
 from ntulearn_skill.core.models import from_storage_time, to_storage_time, utc_now
+from ntulearn_skill.events._activity import (
+    active_claim_sql,
+    active_event_source_sql,
+    effective_extraction_sql,
+)
 from ntulearn_skill.events._matching import (
     change_applies,
     precision_rank,
@@ -119,7 +124,7 @@ class EventReconciler:
 
     name = "deterministic-event-reconciler"
 
-    def __init__(self, database: Database, resolver_version: str = "1") -> None:
+    def __init__(self, database: Database, resolver_version: str = "2") -> None:
         if not resolver_version.strip() or len(resolver_version) > 200:
             raise ValueError("resolver version is invalid")
         self.database = database
@@ -205,8 +210,14 @@ class EventReconciler:
         connection = self.database.connect()
         try:
             course_key = DomainRepository._lookup_domain_key(connection, course, "course", "course")
+            active_source = active_event_source_sql("source")
             rows = connection.execute(
-                "SELECT * FROM event WHERE course_key = ? ORDER BY event_key", (course_key,)
+                f"""SELECT event.* FROM event
+                WHERE event.course_key = ? AND EXISTS (
+                    SELECT 1 FROM event_source source
+                    WHERE source.event_key = event.event_key AND {active_source}
+                ) ORDER BY event.event_key""",
+                (course_key,),
             ).fetchall()
             return tuple(self._event(connection, row) for row in rows)
         except (sqlite3.Error, json.JSONDecodeError, TypeError):
@@ -219,8 +230,14 @@ class EventReconciler:
             raise ValueError("event key must be positive")
         connection = self.database.connect()
         try:
+            active_source = active_event_source_sql("source")
             row = connection.execute(
-                "SELECT * FROM event WHERE event_key = ?", (event_key,)
+                f"""SELECT event.* FROM event
+                WHERE event.event_key = ? AND EXISTS (
+                    SELECT 1 FROM event_source source
+                    WHERE source.event_key = event.event_key AND {active_source}
+                )""",
+                (event_key,),
             ).fetchone()
             return None if row is None else self._event(connection, row)
         except (sqlite3.Error, json.JSONDecodeError, TypeError):
@@ -336,10 +353,11 @@ class EventReconciler:
             for decision in self.list_decisions(course)
             if self._decision_run_key(decision.key) == run_key
         )
+        active_source_keys = self._active_source_keys(course)
         unresolved = tuple(
             source
             for source in self.list_event_sources()
-            if source.course == course
+            if source.key in active_source_keys
             and source.resolution_state is not EventSourceResolutionState.MATCHED
         )
         return ReconciliationResult(
@@ -352,6 +370,24 @@ class EventReconciler:
             decisions,
             cache_hit,
         )
+
+    def _active_source_keys(self, course: CourseId) -> frozenset[int]:
+        connection = self.database.connect()
+        try:
+            course_key = DomainRepository._lookup_domain_key(connection, course, "course", "course")
+            active_source = active_event_source_sql("source")
+            return frozenset(
+                int(row["event_source_key"])
+                for row in connection.execute(
+                    f"""SELECT source.event_source_key FROM event_source source
+                    WHERE source.course_key = ? AND {active_source}""",
+                    (course_key,),
+                )
+            )
+        except sqlite3.Error:
+            raise EventReconciliationError("event source lookup failed") from None
+        finally:
+            connection.close()
 
     def _decision_run_key(self, decision_key: int) -> int:
         connection = self.database.connect()
@@ -384,19 +420,25 @@ class EventReconciler:
             WHERE event_key = ? ORDER BY field_name""",
             (event_key,),
         ).fetchall()
+        active_source = active_event_source_sql("source")
         source_rows = connection.execute(
-            """SELECT source.*, provider.name AS provider,
+            f"""SELECT source.*, provider.name AS provider,
                       course_object.remote_key AS course_remote
             FROM event_source source
             JOIN course ON course.course_key = source.course_key
             JOIN source_object course_object
               ON course_object.source_object_key = course.source_object_key
             JOIN source_provider provider ON provider.provider_key = course_object.provider_key
-            WHERE source.event_key = ? ORDER BY source.event_source_key""",
+            WHERE source.event_key = ? AND {active_source}
+            ORDER BY source.event_source_key""",
             (event_key,),
         ).fetchall()
+        active_claim = active_claim_sql("claim")
         claim_rows = connection.execute(
-            "SELECT * FROM claim WHERE event_key = ? ORDER BY claim_key", (event_key,)
+            f"""SELECT claim.* FROM claim
+            WHERE claim.event_key = ? AND {active_claim}
+            ORDER BY claim.claim_key""",
+            (event_key,),
         ).fetchall()
         event_type = None if row["event_type"] is None else EventType(str(row["event_type"]))
         status = None if row["status"] is None else EventStatus(str(row["status"]))
@@ -543,9 +585,13 @@ class EventReconciler:
 
     @staticmethod
     def _candidates(connection: sqlite3.Connection, course_key: int) -> tuple[_CandidateData, ...]:
+        effective = effective_extraction_sql("extraction")
         rows = connection.execute(
-            """SELECT * FROM event_candidate
-            WHERE course_key = ? ORDER BY candidate_key""",
+            f"""SELECT candidate.* FROM event_candidate candidate
+            JOIN extraction_record extraction
+              ON extraction.extraction_record_key = candidate.extraction_record_key
+            WHERE candidate.course_key = ? AND {effective}
+            ORDER BY candidate.candidate_key""",
             (course_key,),
         ).fetchall()
         result: list[_CandidateData] = []
@@ -613,6 +659,7 @@ class EventReconciler:
             (course_key,),
         ).fetchall()
         payload = {
+            "effective_extractions": self._effective_extraction_fingerprint(connection, course_key),
             "candidates": [
                 [candidate.key, [[field.key, field.value_json] for field in candidate.fields]]
                 for candidate in candidates
@@ -622,6 +669,42 @@ class EventReconciler:
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _effective_extraction_fingerprint(
+        connection: sqlite3.Connection, course_key: int
+    ) -> list[list[object]]:
+        effective = effective_extraction_sql("extraction")
+        rows = connection.execute(
+            f"""SELECT extraction.extraction_record_key, extraction.input_kind,
+                extraction.status
+            FROM extraction_record extraction
+            WHERE {effective} AND (
+                EXISTS (
+                    SELECT 1 FROM source_observation observation
+                    JOIN (
+                        SELECT source_object_key, course_key FROM announcement
+                        UNION ALL SELECT source_object_key, course_key FROM assessment
+                        UNION ALL SELECT source_object_key, course_key FROM schedule_item
+                        UNION ALL SELECT source_object_key, course_key FROM due_item
+                    ) owner ON owner.source_object_key = observation.source_object_key
+                    WHERE observation.observation_key = extraction.source_observation_key
+                      AND owner.course_key = ?
+                )
+                OR EXISTS (
+                    SELECT 1 FROM resource_version version
+                    JOIN resource ON resource.resource_key = version.resource_key
+                    JOIN content_node content ON content.content_key = resource.content_key
+                    WHERE version.version_key = extraction.version_key
+                      AND content.course_key = ?
+                )
+            ) ORDER BY extraction.extraction_record_key""",
+            (course_key, course_key),
+        ).fetchall()
+        return [
+            [int(row["extraction_record_key"]), str(row["input_kind"]), str(row["status"])]
+            for row in rows
+        ]
 
     def _ensure_source_and_claims(
         self, connection: sqlite3.Connection, candidate: _CandidateData, now: str
@@ -895,18 +978,21 @@ class EventReconciler:
         candidate_context = self._source_context(connection, source_row)
         change_kind = ChangeKind(str(source_row["change_kind"]))
         matches: list[_Match] = []
+        active_claim = active_claim_sql("claim")
+        active_source = active_event_source_sql("source")
         for event_row in connection.execute(
             "SELECT event_key FROM event WHERE course_key = ? ORDER BY event_key",
             (candidate.course_key,),
         ):
             event_key = int(event_row["event_key"])
             rows = connection.execute(
-                """SELECT claim.field_name, claim.value_json,
+                f"""SELECT claim.field_name, claim.value_json,
                           source.source_object_key, source.event_source_key,
                           source.source_kind, source.evidence_ref_key
                 FROM claim JOIN event_source source
                   ON source.event_source_key = claim.event_source_key
-                WHERE claim.event_key = ? AND claim.origin = 'SOURCE'""",
+                WHERE claim.event_key = ? AND claim.origin = 'SOURCE'
+                  AND {active_claim}""",
                 (event_key,),
             ).fetchall()
             event_titles = [
@@ -933,7 +1019,9 @@ class EventReconciler:
             )
             type_compatible = exact_type or generic_compatible
             event_source_rows = connection.execute(
-                "SELECT * FROM event_source WHERE event_key = ?", (event_key,)
+                f"""SELECT source.* FROM event_source source
+                WHERE source.event_key = ? AND {active_source}""",
+                (event_key,),
             ).fetchall()
             same_source = any(
                 row["source_object_key"] is not None
@@ -1123,10 +1211,19 @@ class EventReconciler:
         )
 
     def _recompute_event(self, connection: sqlite3.Connection, event_key: int, now: str) -> None:
+        active_claim = active_claim_sql("claim")
         connection.execute(
-            """UPDATE claim SET decision_state = 'UNRESOLVED',
-                decision_reason = 'awaiting field reconciliation', updated_at = ?
-            WHERE event_key = ? AND origin = 'SOURCE'""",
+            f"""UPDATE claim SET
+                decision_state = CASE
+                    WHEN {active_claim} THEN 'UNRESOLVED'
+                    ELSE 'REJECTED'
+                END,
+                decision_reason = CASE
+                    WHEN {active_claim} THEN 'awaiting field reconciliation'
+                    ELSE 'superseded deterministic extraction'
+                END,
+                updated_at = ?
+            WHERE claim.event_key = ? AND claim.origin = 'SOURCE'""",
             (now, event_key),
         )
         connection.execute("DELETE FROM event_field_projection WHERE event_key = ?", (event_key,))
@@ -1137,10 +1234,10 @@ class EventReconciler:
         )
         for field_name in _CANONICAL_FIELDS:
             rows = connection.execute(
-                """SELECT claim.*, source.change_kind, source.source_timestamp
+                f"""SELECT claim.*, source.change_kind, source.source_timestamp
                 FROM claim LEFT JOIN event_source source
                   ON source.event_source_key = claim.event_source_key
-                WHERE claim.event_key = ? AND claim.field_name = ?
+                WHERE claim.event_key = ? AND claim.field_name = ? AND {active_claim}
                 ORDER BY claim.claim_key""",
                 (event_key, field_name.value),
             ).fetchall()
@@ -1260,10 +1357,12 @@ class EventReconciler:
             "SELECT 1 FROM event_conflict WHERE event_key = ? AND state = 'OPEN' LIMIT 1",
             (event_key,),
         ).fetchone()
+        active_source = active_event_source_sql("source")
         has_ambiguity = connection.execute(
-            """SELECT 1 FROM event_source_possible_match possible
+            f"""SELECT 1 FROM event_source_possible_match possible
             JOIN event_source source ON source.event_source_key = possible.event_source_key
-            WHERE possible.event_key = ? AND source.resolution_state <> 'MATCHED' LIMIT 1""",
+            WHERE possible.event_key = ? AND source.resolution_state <> 'MATCHED'
+              AND {active_source} LIMIT 1""",
             (event_key,),
         ).fetchone()
         state = (
@@ -1274,8 +1373,9 @@ class EventReconciler:
             else EventResolutionState.RESOLVED
         )
         confidence_row = connection.execute(
-            """SELECT AVG(confidence) AS confidence, COUNT(DISTINCT event_source_key) AS sources
-            FROM claim WHERE event_key = ? AND origin = 'SOURCE'""",
+            f"""SELECT AVG(confidence) AS confidence,
+                COUNT(DISTINCT event_source_key) AS sources
+            FROM claim WHERE event_key = ? AND origin = 'SOURCE' AND {active_claim}""",
             (event_key,),
         ).fetchone()
         assert confidence_row is not None
@@ -1433,13 +1533,17 @@ class EventReconciler:
         for row in rows:
             claim_key = int(row["claim_key"])
             value = cast(JsonValue, json.loads(str(row["value_json"])))
-            agrees = (
-                temporal_agrees(selected_value, value)
-                if field_name in _TEMPORAL_FIELDS
-                else semantic_value(field_name, selected_value) == semantic_value(field_name, value)
-            )
-            same_precision = row["temporal_precision"] == selected["temporal_precision"]
-            accepted = agrees and (field_name not in _TEMPORAL_FIELDS or same_precision)
+            if claim_key == selected_key:
+                accepted = True
+            else:
+                agrees = (
+                    temporal_agrees(selected_value, value)
+                    if field_name in _TEMPORAL_FIELDS
+                    else semantic_value(field_name, selected_value)
+                    == semantic_value(field_name, value)
+                )
+                same_precision = row["temporal_precision"] == selected["temporal_precision"]
+                accepted = agrees and (field_name not in _TEMPORAL_FIELDS or same_precision)
             state = (
                 ClaimDecisionState.ACCEPTED
                 if accepted
