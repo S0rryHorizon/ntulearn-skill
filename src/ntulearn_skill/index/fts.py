@@ -98,9 +98,28 @@ COALESCE(
 )
 """
 
+_CURRENT_USABLE_PARSE_SQL = """
+parsed.status IN ('COMPLETE', 'PARTIAL')
+AND NOT EXISTS (
+    SELECT 1
+    FROM parsed_document newer_parse
+    WHERE newer_parse.version_key = parsed.version_key
+      AND newer_parse.status IN ('COMPLETE', 'PARTIAL')
+      AND (
+          newer_parse.parsed_at > parsed.parsed_at
+          OR (
+              newer_parse.parsed_at = parsed.parsed_at
+              AND newer_parse.parse_key > parsed.parse_key
+          )
+      )
+)
+"""
+
 
 class SearchIndex:
     """Build search documents only from canonical relational rows."""
+
+    version = "fts5-2"
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -492,7 +511,8 @@ class SearchIndex:
             JOIN resource r ON r.resource_key = v.resource_key
             JOIN content_node n ON n.content_key = r.content_key
             JOIN course c ON c.course_key = n.course_key
-            WHERE (? IS NULL OR c.course_key = ?)
+            WHERE {_CURRENT_USABLE_PARSE_SQL}
+              AND (? IS NULL OR c.course_key = ?)
               AND (? IS NULL OR r.resource_key = ?)
             ORDER BY chunk.chunk_key
             """,
@@ -563,6 +583,7 @@ class SearchIndex:
             JOIN content_node n ON n.content_key = r.content_key
             JOIN course c ON c.course_key = n.course_key
             WHERE representation.text IS NOT NULL
+              AND {_CURRENT_USABLE_PARSE_SQL}
               {visual_filter}
               AND (? IS NULL OR c.course_key = ?)
               AND (? IS NULL OR r.resource_key = ?)

@@ -8,7 +8,7 @@ from enum import StrEnum
 
 from ntulearn_skill.core import Availability, CourseId, Coverage
 from ntulearn_skill.extractors import SemanticType
-from ntulearn_skill.parsers import DocumentChunkRecord, JsonValue
+from ntulearn_skill.parsers import DocumentChunkRecord, JsonValue, VisualReviewStatus
 
 
 class SearchEntityKind(StrEnum):
@@ -151,6 +151,35 @@ class SearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceVisualEvidence:
+    representation_key: int
+    chunk_key: int
+    text: str
+    method: str
+    provider: str | None
+    engine_version: str
+    settings_hash: str
+    confidence: float | None
+    diagnostic_reason: str
+    method_version: str
+    settings: dict[str, JsonValue]
+    review_status: VisualReviewStatus
+    uncertainty: tuple[str, ...]
+    version_key: int
+    source_sha256: str
+    source_page_index: int
+    rendered_sha256: str
+    rendered_representation_key: int | None
+    renderer_method: str | None
+    renderer_engine_version: str | None
+    render_settings_hash: str | None
+    render_method_version: str | None
+    render_settings: dict[str, JsonValue] | None
+    source_locator: dict[str, JsonValue]
+    is_current: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedSource:
     reference: SourceReference
     provider: str
@@ -160,3 +189,4 @@ class ResolvedSource:
     locator: dict[str, JsonValue] | None
     chunks: tuple[DocumentChunkRecord, ...]
     observation: dict[str, JsonValue] | None = None
+    visual_evidence: tuple[SourceVisualEvidence, ...] = ()

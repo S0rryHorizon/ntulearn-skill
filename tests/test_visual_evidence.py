@@ -16,7 +16,7 @@ from reportlab.pdfgen import canvas
 from ntulearn_skill.cli import run
 from ntulearn_skill.cli._main import EXIT_INCOMPLETE
 from ntulearn_skill.core import AttachmentId, ContentId, CourseId, Coverage
-from ntulearn_skill.core.api import CoreService, ResourceRef
+from ntulearn_skill.core.api import CoreService, ResourceRef, SourceLocatorRef
 from ntulearn_skill.core.results import ResultEnvelope
 from ntulearn_skill.events import DeterministicEventExtractor, EventReconciler
 from ntulearn_skill.index import SearchIndex
@@ -30,6 +30,7 @@ from ntulearn_skill.parsers import (
 from ntulearn_skill.parsers.repository import ParseRepository
 from ntulearn_skill.parsers.service import ParseService
 from ntulearn_skill.parsers.visual import VisualEvidenceError, VisualEvidenceService
+from ntulearn_skill.search import SourceReference, SourceReferenceKind
 from ntulearn_skill.storage import (
     Database,
     DomainRepository,
@@ -185,7 +186,14 @@ def _fill_bundle(item, *, status: str = "NEEDS_REVIEW") -> None:
     item.bundle_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _fill_bundle_text(item, text: str, *, confidence: float = 0.55) -> None:
+def _fill_bundle_text(
+    item,
+    text: str,
+    *,
+    confidence: float = 0.55,
+    review_status: str = "NEEDS_REVIEW",
+    uncertainty: tuple[str, ...] = (),
+) -> None:
     payload = json.loads(item.bundle_path.read_text(encoding="utf-8"))
     payload["results"] = [
         {
@@ -194,8 +202,8 @@ def _fill_bundle_text(item, text: str, *, confidence: float = 0.55) -> None:
             "engine_version": "synthetic-host-view-1",
             "settings": {"instruction_version": "event-transcription-1"},
             "confidence": confidence,
-            "review_status": "NEEDS_REVIEW",
-            "uncertainty": [],
+            "review_status": review_status,
+            "uncertainty": list(uncertainty),
         }
     ]
     item.bundle_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -508,6 +516,145 @@ def test_corrected_visual_text_replaces_active_extraction_and_search_view(
             WHERE text_origin = 'derived:vision_description'"""
         ).fetchall()
     assert [str(row["body"]) for row in indexed] == ["CurrentTopaz Assignment due 2 April 2032"]
+
+
+def test_source_cli_reports_current_visual_provenance_without_rendering_or_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = _harness(tmp_path)
+    written, parsed = _ingest_and_parse(harness)
+    renderer = _SyntheticRenderer()
+    prepared = harness.visual.prepare(parsed.document.key, dpi=144, renderer=renderer)
+    core = CoreService(harness.database, runtime_paths=harness.paths)
+    _fill_bundle_text(
+        prepared[0],
+        "ObsoleteSilver Assignment due 5 April 2032",
+        confidence=0.4,
+    )
+    first = core.import_visual_evidence(prepared[0].bundle_path)
+    _fill_bundle_text(
+        prepared[0],
+        "CurrentIndigo Assignment due 6 April 2032",
+        confidence=0.25,
+        review_status="PARTIAL",
+        uncertainty=("A second visual region remains unclear",),
+    )
+    second = core.import_visual_evidence(prepared[0].bundle_path)
+    assert first.ok and second.ok
+
+    def unexpected_io(*_args, **_kwargs):
+        raise AssertionError("source lookup must remain cache-only")
+
+    monkeypatch.setattr("subprocess.run", unexpected_io)
+    monkeypatch.setattr("socket.create_connection", unexpected_io)
+    reference = SourceLocatorRef(
+        SourceReference(SourceReferenceKind.SOURCE_LOCATOR, parsed.chunks[1].locator_key)
+    )
+    current = core.resolve_source(reference, context_window=0)
+
+    assert current.completeness is Coverage.PARTIAL
+    assert [warning.code for warning in current.warnings] == ["visual_evidence_partial"]
+    resolved = current.items[0]
+    assert [chunk.native_text for chunk in resolved.chunks] == [parsed.chunks[1].native_text]
+    assert [item.text for item in resolved.visual_evidence] == [
+        "CurrentIndigo Assignment due 6 April 2032"
+    ]
+    evidence = resolved.visual_evidence[0]
+    assert evidence.representation_key == second.items[0].representation_key
+    assert evidence.chunk_key == parsed.chunks[1].key
+    assert evidence.method == "host-view-image"
+    assert evidence.provider == "local-host"
+    assert evidence.engine_version == "synthetic-host-view-1"
+    assert evidence.method_version == "host-view-image-import-1"
+    assert evidence.settings == {"instruction_version": "event-transcription-1"}
+    assert evidence.confidence == 0.25
+    assert evidence.review_status is VisualReviewStatus.PARTIAL
+    assert evidence.uncertainty == ("A second visual region remains unclear",)
+    assert evidence.version_key == written.version.key
+    assert evidence.source_sha256 == written.version.sha256
+    assert evidence.source_page_index == 1
+    assert evidence.rendered_sha256 == prepared[0].rendered_sha256
+    assert evidence.rendered_representation_key == prepared[0].rendered_representation_key
+    assert evidence.renderer_method == "synthetic-page-render"
+    assert evidence.renderer_engine_version == "synthetic-renderer-1"
+    assert evidence.render_settings_hash is not None
+    assert evidence.render_method_version == "selective-page-render-1"
+    assert evidence.render_settings == {
+        "dpi": 144,
+        "engine_version": "synthetic-renderer-1",
+        "format": "png",
+        "method_version": "selective-page-render-1",
+        "renderer_method": "synthetic-page-render",
+    }
+    assert evidence.source_locator["physical_page_index"] == 1
+    assert evidence.is_current
+
+    historical = core.resolve_source(
+        reference,
+        context_window=0,
+        include_visual_history=True,
+    )
+    assert [item.text for item in historical.items[0].visual_evidence] == [
+        "ObsoleteSilver Assignment due 5 April 2032",
+        "CurrentIndigo Assignment due 6 April 2032",
+    ]
+    assert [item.is_current for item in historical.items[0].visual_evidence] == [False, True]
+
+    output = io.StringIO()
+    code = run(
+        [
+            "source",
+            str(parsed.chunks[1].locator_key),
+            "--kind",
+            "source_locator",
+            "--context-window",
+            "0",
+            "--json",
+        ],
+        service=core,
+        stdout=output,
+    )
+    payload = json.loads(output.getvalue())
+    assert code == EXIT_INCOMPLETE
+    assert payload["completeness"] == "PARTIAL"
+    assert payload["warnings"][0]["code"] == "visual_evidence_partial"
+    visual_json = payload["items"][0]["visual_evidence"]
+    assert [item["text"] for item in visual_json] == ["CurrentIndigo Assignment due 6 April 2032"]
+    assert visual_json[0]["uncertainty"] == ["A second visual region remains unclear"]
+    assert visual_json[0]["rendered_sha256"] == prepared[0].rendered_sha256
+    assert "artifact_relpath" not in visual_json[0]
+
+    history_output = io.StringIO()
+    assert (
+        run(
+            [
+                "source",
+                str(parsed.chunks[1].locator_key),
+                "--context-window",
+                "0",
+                "--include-visual-history",
+                "--json",
+            ],
+            service=core,
+            stdout=history_output,
+        )
+        == EXIT_INCOMPLETE
+    )
+    history_json = json.loads(history_output.getvalue())["items"][0]["visual_evidence"]
+    assert [item["is_current"] for item in history_json] == [False, True]
+
+    human_output = io.StringIO()
+    assert (
+        run(
+            ["source", str(parsed.chunks[1].locator_key), "--context-window", "0"],
+            service=core,
+            stdout=human_output,
+        )
+        == EXIT_INCOMPLETE
+    )
+    assert '"review_status":"PARTIAL"' in human_output.getvalue()
+    assert "A second visual region remains unclear" in human_output.getvalue()
+    assert renderer.calls == [1]
 
 
 def test_repeated_import_retries_a_pending_projection(

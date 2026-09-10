@@ -77,6 +77,31 @@ Normal reconciliation can create source-linked claims and unresolved event proje
 status remains available in visual-evidence metadata. If derived projection cannot finish, import
 returns `visual_projection_pending`; rerunning the same import safely retries the projection.
 
+Resolve a search result's `source_locator` through the ordinary source command to inspect the exact
+native chunk and its current visual supplement together:
+
+```console
+ntulearn --root /private/runtime source 91 --kind source_locator --context-window 0 --json
+```
+
+The native parser result stays in `chunks`; `visual_evidence` separately reports the current
+supplemental text, representation and chunk keys, method and provider, engine and method versions,
+settings and settings hash, confidence, review status, uncertainty, source version and page,
+original and rendered hashes, physical source locator, and `is_current`. When the cached render is
+available, it also reports the renderer representation, method, engine and method versions,
+settings, and settings hash. A source result containing
+visual evidence remains `PARTIAL` and carries its review warning, so host transcription is not
+presented as verified native text. The lookup reads the cache only: it does not render pages, open
+the original, or make a network request, and it does not reveal the cached image path.
+
+Add `--include-visual-history` to the same command for an explicit immutable audit view. Superseded
+rows have `is_current: false`; without that flag, the command returns only the latest description
+for each source page and inspection method.
+
+Default search indexes native and derived chunks from only the latest usable (`COMPLETE` or
+`PARTIAL`) parse of each immutable resource version. Older parse rows and locators remain available
+for direct source audit, and a newer failed or unsupported parse does not hide the last usable one.
+
 Current limits are PDF-only page rendering, at most 64 results per bundle, 32 KiB of text per
 result, a 512 KiB bundle, 72–300 DPI, and a 32 MiB rendered PNG. A parse with more than 64 flagged
 pages is rejected before rendering and needs a future split-bundle workflow. DOCX visual fallback, automatic

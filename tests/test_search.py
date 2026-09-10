@@ -21,6 +21,7 @@ from ntulearn_skill.index import SearchIndex
 from ntulearn_skill.parsers import (
     FallbackOutput,
     ParseRepository,
+    ParserOptions,
     ParserRegistry,
     ParseService,
     PdfParser,
@@ -32,6 +33,7 @@ from ntulearn_skill.search import (
     SearchQuery,
     SearchService,
     SearchTextOrigin,
+    SourceReference,
     SourceReferenceKind,
 )
 from ntulearn_skill.storage import (
@@ -368,6 +370,114 @@ def test_derived_text_is_separate_and_rebuild_is_lossless(tmp_path: Path) -> Non
     assert [(hit.source, hit.locator) for hit in after.items] == [
         (hit.source, hit.locator) for hit in before.items
     ]
+
+
+def test_index_uses_latest_usable_parse_and_keeps_old_locator_resolvable(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    written, first_parse = _ingest_and_parse(
+        harness,
+        remote_key="parse-revision",
+        title="Parse Revision Notes",
+        filename="parse-revision.pdf",
+        pages=("Stable native parse beacon",),
+        offset=1,
+    )
+    repository = ParseRepository(harness.database)
+    repository.append_representation(
+        first_parse.chunks[0].key,
+        FallbackOutput(
+            RepresentationKind.VISION_DESCRIPTION,
+            "Superseded parse annotation",
+            None,
+            "synthetic-local",
+            None,
+            "1",
+            hashlib.sha256(b"old-parse-settings").hexdigest(),
+            0.5,
+        ),
+        diagnostic_reason="synthetic_old_parse",
+    )
+    parser = ParseService(
+        harness.paths,
+        harness.resources,
+        repository,
+        ParserRegistry((PdfParser(),)),
+    )
+    current_parse = parser.parse_version(
+        written.version.key,
+        options=ParserOptions(diagnostic_version="stage-b-1"),
+    )
+    repository.append_representation(
+        current_parse.chunks[0].key,
+        FallbackOutput(
+            RepresentationKind.VISION_DESCRIPTION,
+            "Current parse annotation",
+            None,
+            "synthetic-local",
+            None,
+            "1",
+            hashlib.sha256(b"current-parse-settings").hexdigest(),
+            0.5,
+        ),
+        diagnostic_reason="synthetic_current_parse",
+    )
+    with harness.database.transaction() as connection:
+        connection.execute(
+            """INSERT INTO parsed_document(
+                version_key, resource_sha256, parser_name, parser_version,
+                engine_version, settings_hash, settings_json, status, coverage,
+                warning_codes_json, error_code, parsed_at
+            ) VALUES (?, ?, 'synthetic-failed', '1', '1', ?, '{}',
+                      'FAILED', 'FAILED', '[]', 'synthetic_failure', ?)""",
+            (
+                written.version.key,
+                written.version.sha256,
+                hashlib.sha256(b"failed-parse-settings").hexdigest(),
+                datetime(2099, 1, 1, tzinfo=UTC).isoformat(),
+            ),
+        )
+
+    SearchIndex(harness.database).rebuild()
+    search = SearchService(harness.database)
+    native = search.search(
+        SearchQuery(
+            "native parse beacon",
+            SearchFilters(
+                entity_kinds=frozenset({SearchEntityKind.CHUNK}),
+                text_origins=frozenset({SearchTextOrigin.NATIVE}),
+            ),
+            neighbor_count=0,
+        )
+    )
+    old_derived = search.search(SearchQuery("Superseded parse annotation"))
+    current_derived = search.search(SearchQuery("Current parse annotation"))
+
+    assert [hit.chunk_key for hit in native.items] == [current_parse.chunks[0].key]
+    assert old_derived.items == ()
+    assert [hit.chunk_key for hit in current_derived.items] == [current_parse.chunks[0].key]
+    with harness.database.connect() as connection:
+        indexed_counts = {
+            str(row["text_origin"]): (int(row["rows"]), int(row["logical_chunks"]))
+            for row in connection.execute(
+                """SELECT text_origin, COUNT(*) AS rows,
+                          COUNT(DISTINCT chunk_key) AS logical_chunks
+                FROM search_document
+                WHERE version_key = ? AND entity_kind = 'chunk'
+                GROUP BY text_origin""",
+                (written.version.key,),
+            )
+        }
+    assert indexed_counts == {
+        "derived:vision_description": (1, 1),
+        "native": (1, 1),
+    }
+    old_source = search.resolve_source(
+        SourceReference(SourceReferenceKind.SOURCE_LOCATOR, first_parse.chunks[0].locator_key),
+        context_window=0,
+    )
+    assert [chunk.key for chunk in old_source.chunks] == [first_parse.chunks[0].key]
 
 
 def test_rebuild_recovers_when_external_content_fts_postings_are_missing(

@@ -612,12 +612,16 @@ class LocalJobPlanner:
                 connection=active,
             )
             index_identity = _identity(
-                {"kind": "index", "parse_identity": parse_identity, "indexer_version": "fts5-1"}
+                {
+                    "kind": "index",
+                    "parse_identity": parse_identity,
+                    "indexer_version": SearchIndex.version,
+                }
             )
             index = self.queue.schedule(
                 LocalJobKind.INDEX,
                 index_identity,
-                {"version_key": version_key, "indexer_version": "fts5-1"},
+                {"version_key": version_key, "indexer_version": SearchIndex.version},
                 depends_on_job_key=parse.key,
                 max_attempts=self.max_attempts,
                 connection=active,
@@ -860,7 +864,7 @@ class LocalJobRunner:
                 raise LocalJobContractMismatch("parser result does not match the queued contract")
             return {"parse_key": parse_result.document.key}
         if job.kind is LocalJobKind.INDEX:
-            if _required_text(job.payload, "indexer_version") != "fts5-1":
+            if _required_text(job.payload, "indexer_version") != self.search_index.version:
                 raise LocalJobContractMismatch("queued indexer contract is unavailable")
             index_result = self.search_index.rebuild()
             return {"source_generation": index_result.source_generation}

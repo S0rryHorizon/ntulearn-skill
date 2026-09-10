@@ -214,7 +214,11 @@ def _dispatch(
         )
     if command == "source":
         reference = SourceReference(SourceReferenceKind(args.kind), args.key)
-        return service.resolve_source(SourceLocatorRef(reference), args.context_window)
+        return service.resolve_source(
+            SourceLocatorRef(reference),
+            args.context_window,
+            include_visual_history=args.include_visual_history,
+        )
     if command == "resource":
         return service.get_resource(
             _resource(args.resource_key), args.version, args.include_local_path

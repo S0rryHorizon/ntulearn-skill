@@ -16,6 +16,7 @@ from ntulearn_skill.parsers import (
     JsonValue,
     ParseRepository,
     ParseStorageError,
+    VisualReviewStatus,
 )
 from ntulearn_skill.search.models import (
     CoverageView,
@@ -28,6 +29,7 @@ from ntulearn_skill.search.models import (
     SearchTextOrigin,
     SourceReference,
     SourceReferenceKind,
+    SourceVisualEvidence,
 )
 from ntulearn_skill.storage import Database, StorageError
 
@@ -168,10 +170,16 @@ class SearchService:
         return SearchResult(items, coverage, completeness, as_of, warnings, message)
 
     def resolve_source(
-        self, reference: SourceReference, *, context_window: int = 1
+        self,
+        reference: SourceReference,
+        *,
+        context_window: int = 1,
+        include_visual_history: bool = False,
     ) -> ResolvedSource:
         if not 0 <= context_window <= 5:
             raise ValueError("context window must be between 0 and 5")
+        if not isinstance(include_visual_history, bool):
+            raise TypeError("visual history selection must be boolean")
         connection = self.database.connect()
         try:
             if reference.kind is SourceReferenceKind.SOURCE_OBJECT:
@@ -290,6 +298,10 @@ class SearchService:
         except ParseStorageError:
             raise SourceResolutionError("local source resolution failed") from None
         chunks = () if not hydrated else hydrated[0].chunks
+        visual_evidence = self._source_visual_evidence(
+            tuple(chunk.key for chunk in chunks),
+            include_history=include_visual_history,
+        )
         return ResolvedSource(
             reference,
             str(row["provider"]),
@@ -298,6 +310,159 @@ class SearchService:
             int(row["version_key"]),
             json.loads(str(row["structured_json"])),
             chunks,
+            visual_evidence=visual_evidence,
+        )
+
+    def _source_visual_evidence(
+        self, chunk_keys: tuple[int, ...], *, include_history: bool
+    ) -> tuple[SourceVisualEvidence, ...]:
+        if not chunk_keys:
+            return ()
+        placeholders = ", ".join("?" for _key in chunk_keys)
+        current_filter = (
+            ""
+            if include_history
+            else """AND NOT EXISTS (
+                    SELECT 1
+                    FROM chunk_representation newer
+                    JOIN visual_evidence_metadata newer_metadata
+                      ON newer_metadata.representation_key = newer.representation_key
+                    WHERE newer.chunk_key = representation.chunk_key
+                      AND newer.representation_kind = 'vision_description'
+                      AND newer.method = representation.method
+                      AND newer_metadata.version_key = metadata.version_key
+                      AND newer_metadata.source_page_index = metadata.source_page_index
+                      AND newer.representation_key > representation.representation_key
+                )"""
+        )
+        connection = self.database.connect()
+        try:
+            metadata_available = connection.execute(
+                """SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'visual_evidence_metadata'"""
+            ).fetchone()
+            if metadata_available is None:
+                return ()
+            rows = connection.execute(
+                f"""SELECT representation.representation_key, representation.chunk_key,
+                           representation.text, representation.method,
+                           representation.provider, representation.engine_version,
+                           representation.settings_hash, representation.confidence,
+                           representation.diagnostic_reason, metadata.method_version,
+                           metadata.settings_json, metadata.review_status,
+                           metadata.uncertainty_json, metadata.version_key,
+                           metadata.source_sha256, metadata.source_page_index,
+                           metadata.rendered_sha256,
+                           rendered.representation_key AS rendered_representation_key,
+                           rendered.method AS renderer_method,
+                           rendered.engine_version AS renderer_engine_version,
+                           rendered.settings_hash AS render_settings_hash,
+                           rendered_metadata.method_version AS render_method_version,
+                           rendered_metadata.settings_json AS render_settings_json,
+                           metadata.source_locator_json,
+                           NOT EXISTS (
+                               SELECT 1
+                               FROM chunk_representation newer
+                               JOIN visual_evidence_metadata newer_metadata
+                                 ON newer_metadata.representation_key
+                                  = newer.representation_key
+                               WHERE newer.chunk_key = representation.chunk_key
+                                 AND newer.representation_kind = 'vision_description'
+                                 AND newer.method = representation.method
+                                 AND newer_metadata.version_key = metadata.version_key
+                                 AND newer_metadata.source_page_index
+                                   = metadata.source_page_index
+                                 AND newer.representation_key
+                                   > representation.representation_key
+                           ) AS is_current
+                    FROM chunk_representation representation
+                    JOIN visual_evidence_metadata metadata
+                      ON metadata.representation_key = representation.representation_key
+                    LEFT JOIN chunk_representation rendered
+                      ON rendered.representation_key = (
+                          SELECT candidate.representation_key
+                          FROM chunk_representation candidate
+                          JOIN visual_evidence_metadata candidate_metadata
+                            ON candidate_metadata.representation_key
+                             = candidate.representation_key
+                          WHERE candidate.chunk_key = representation.chunk_key
+                            AND candidate.representation_kind = 'rendered_derivative'
+                            AND candidate.artifact_relpath = representation.artifact_relpath
+                            AND candidate_metadata.version_key = metadata.version_key
+                            AND candidate_metadata.source_page_index
+                              = metadata.source_page_index
+                            AND candidate_metadata.source_sha256 = metadata.source_sha256
+                            AND candidate_metadata.rendered_sha256 = metadata.rendered_sha256
+                          ORDER BY candidate.representation_key DESC
+                          LIMIT 1
+                      )
+                    LEFT JOIN visual_evidence_metadata rendered_metadata
+                      ON rendered_metadata.representation_key = rendered.representation_key
+                    WHERE representation.chunk_key IN ({placeholders})
+                      AND representation.representation_kind = 'vision_description'
+                      AND representation.text IS NOT NULL
+                      {current_filter}
+                    ORDER BY representation.chunk_key, representation.representation_key""",
+                chunk_keys,
+            ).fetchall()
+            return tuple(self._source_visual_item(row) for row in rows)
+        except (sqlite3.Error, TypeError, ValueError, json.JSONDecodeError):
+            raise SourceResolutionError("local visual source resolution failed") from None
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _source_visual_item(row: sqlite3.Row) -> SourceVisualEvidence:
+        settings = json.loads(str(row["settings_json"]))
+        uncertainty = json.loads(str(row["uncertainty_json"]))
+        source_locator = json.loads(str(row["source_locator_json"]))
+        render_settings = (
+            None
+            if row["render_settings_json"] is None
+            else json.loads(str(row["render_settings_json"]))
+        )
+        if not isinstance(settings, dict) or not isinstance(source_locator, dict):
+            raise ValueError("visual source metadata must be objects")
+        if render_settings is not None and not isinstance(render_settings, dict):
+            raise ValueError("visual render settings must be an object")
+        if not isinstance(uncertainty, list) or any(
+            not isinstance(item, str) for item in uncertainty
+        ):
+            raise ValueError("visual source uncertainty must be a string list")
+        return SourceVisualEvidence(
+            representation_key=int(row["representation_key"]),
+            chunk_key=int(row["chunk_key"]),
+            text=str(row["text"]),
+            method=str(row["method"]),
+            provider=None if row["provider"] is None else str(row["provider"]),
+            engine_version=str(row["engine_version"]),
+            settings_hash=str(row["settings_hash"]),
+            confidence=None if row["confidence"] is None else float(row["confidence"]),
+            diagnostic_reason=str(row["diagnostic_reason"]),
+            method_version=str(row["method_version"]),
+            settings=settings,
+            review_status=VisualReviewStatus(str(row["review_status"])),
+            uncertainty=tuple(uncertainty),
+            version_key=int(row["version_key"]),
+            source_sha256=str(row["source_sha256"]),
+            source_page_index=int(row["source_page_index"]),
+            rendered_sha256=str(row["rendered_sha256"]),
+            rendered_representation_key=None
+            if row["rendered_representation_key"] is None
+            else int(row["rendered_representation_key"]),
+            renderer_method=None if row["renderer_method"] is None else str(row["renderer_method"]),
+            renderer_engine_version=None
+            if row["renderer_engine_version"] is None
+            else str(row["renderer_engine_version"]),
+            render_settings_hash=None
+            if row["render_settings_hash"] is None
+            else str(row["render_settings_hash"]),
+            render_method_version=None
+            if row["render_method_version"] is None
+            else str(row["render_method_version"]),
+            render_settings=render_settings,
+            source_locator=source_locator,
+            is_current=bool(row["is_current"]),
         )
 
     @staticmethod

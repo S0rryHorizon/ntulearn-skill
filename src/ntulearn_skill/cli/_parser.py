@@ -155,6 +155,11 @@ def build_parser() -> SafeArgumentParser:
         default="source_locator",
     )
     source.add_argument("--context-window", type=_context_window, default=1)
+    source.add_argument(
+        "--include-visual-history",
+        action="store_true",
+        help="Include superseded immutable visual evidence revisions",
+    )
 
     resource = commands.add_parser("resource", help="Read local resource metadata")
     _common_options(resource)

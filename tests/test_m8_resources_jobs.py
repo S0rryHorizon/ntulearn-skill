@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -554,6 +555,56 @@ def test_job_plan_is_idempotent_and_runner_uses_real_local_services(tmp_path: Pa
     assert result.claimed == result.succeeded == 4
     assert result.failed == 0
     assert {job.status for job in harness.queue.list()} == {LocalJobStatus.SUCCEEDED}
+
+
+def test_indexer_contract_upgrade_replans_a_completed_legacy_index_job(tmp_path: Path) -> None:
+    harness = _harness(tmp_path, [_pdf("Invented index contract source")])
+    timestamp = datetime(2027, 1, 10, tzinfo=UTC)
+    fetched = harness.service.fetch(
+        harness.metadata,
+        sync_run_key=_run(harness.database, timestamp),
+        observed_at=timestamp,
+    )
+    assert fetched.version is not None and fetched.job_plan is not None
+    assert (
+        harness.runner.run(
+            max_jobs=1,
+            now=timestamp + timedelta(minutes=1),
+            job_keys=(fetched.job_plan.parse.key,),
+        ).succeeded
+        == 1
+    )
+    legacy_index_key = fetched.job_plan.index.key
+    with harness.database.transaction() as connection:
+        connection.execute(
+            """UPDATE local_job
+            SET input_identity = ?, payload_json = ?, status = 'SUCCEEDED',
+                result_json = ?, completed_at = ?
+            WHERE job_key = ?""",
+            (
+                "f" * 64,
+                json.dumps(
+                    {"version_key": fetched.version.key, "indexer_version": "fts5-1"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                '{"source_generation":0}',
+                (timestamp + timedelta(minutes=1)).isoformat(),
+                legacy_index_key,
+            ),
+        )
+
+    replanned = harness.planner.plan_resource(fetched.version.key)
+
+    assert replanned.index.key != legacy_index_key
+    assert replanned.index.payload["indexer_version"] == "fts5-2"
+    assert replanned.index.status is LocalJobStatus.PENDING
+    completed = harness.runner.run(
+        max_jobs=1,
+        now=timestamp + timedelta(minutes=2),
+        job_keys=(replanned.index.key,),
+    )
+    assert completed.succeeded == 1
 
 
 def test_scoped_runner_reports_truncated_work_without_claiming_other_jobs(tmp_path: Path) -> None:

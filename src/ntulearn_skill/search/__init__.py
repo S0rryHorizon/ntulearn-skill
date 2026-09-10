@@ -11,6 +11,7 @@ from ntulearn_skill.search.models import (
     SearchTextOrigin,
     SourceReference,
     SourceReferenceKind,
+    SourceVisualEvidence,
 )
 from ntulearn_skill.search.service import SearchError, SearchService, SourceResolutionError
 
@@ -28,4 +29,5 @@ __all__ = [
     "SourceReference",
     "SourceReferenceKind",
     "SourceResolutionError",
+    "SourceVisualEvidence",
 ]

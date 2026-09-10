@@ -958,7 +958,11 @@ class CoreService:
             return self._failure(operation, error, "visual_evidence")
 
     def resolve_source(
-        self, locator: SourceLocatorRef, context_window: int = 1
+        self,
+        locator: SourceLocatorRef,
+        context_window: int = 1,
+        *,
+        include_visual_history: bool = False,
     ) -> ResultEnvelope[object]:
         operation = "resolve_source"
         try:
@@ -966,8 +970,12 @@ class CoreService:
                 raise TypeError("source locator must be typed")
             if not 0 <= context_window <= 5:
                 raise ValueError("context window must be between 0 and 5")
+            if not isinstance(include_visual_history, bool):
+                raise TypeError("visual history selection must be boolean")
             resolved = self.search_service.resolve_source(
-                locator.reference, context_window=context_window
+                locator.reference,
+                context_window=context_window,
+                include_visual_history=include_visual_history,
             )
             provenance = ProvenanceView(
                 locator.reference.kind.value,
@@ -976,11 +984,25 @@ class CoreService:
                 version_key=resolved.version_key,
                 locator=resolved.locator,
             )
+            current_visual_statuses = {
+                item.review_status for item in resolved.visual_evidence if item.is_current
+            }
+            warnings = tuple(
+                SafeWarning(
+                    "visual_evidence_partial"
+                    if status.value == "PARTIAL"
+                    else "visual_evidence_needs_review",
+                    "Visual source evidence remains incomplete or requires review.",
+                    f"source_locator:{locator.reference.key}",
+                )
+                for status in sorted(current_visual_statuses, key=lambda item: item.value)
+            )
             return ResultEnvelope(
                 operation,
                 (resolved,),
                 provenance=(provenance,),
-                completeness=Coverage.COMPLETE,
+                warnings=warnings,
+                completeness=Coverage.PARTIAL if current_visual_statuses else Coverage.COMPLETE,
                 local_reads=1,
             )
         except Exception as error:
