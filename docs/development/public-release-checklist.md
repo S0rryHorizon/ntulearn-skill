@@ -4,21 +4,22 @@ Current assessment (2026-09-10): **limited experimental retrieval candidate for 
 private local daily trial; publication pending**.
 
 This status applies to the documented browser-host-assisted collection and local
-retrieval lane. It is not an unqualified public-release approval. No remote, package,
-tag or announcement has been published, and the maintainer's final decision remains
-open.
+retrieval lane. It is not an unqualified public-release approval. No project code,
+package, tag or announcement has been published, and no local Git remote has been
+added. The maintainer's final software-publication decision remains open.
 
 ## Current evidence snapshot
 
 The R1/R2 follow-up uses `ae40a3c` as its comparison baseline. Earlier PASS entries
 below describe their recorded versions and scope, not a new full-suite or live run.
 
-- [ ] R2: GitHub Private vulnerability reporting is the maintainer-selected channel.
-  Establish the repository, enable the feature and verify its reporting entry on
-  the Security page before publication. The workflow is documented in `SECURITY.md`,
-  but the feature is not yet enabled and R2 remains pending. Public issues and pull
-  requests are not a substitute for private vulnerability details. Repository creation
-  and external feature enablement are outside this batch.
+- [x] R2: GitHub Private vulnerability reporting is enabled for
+  [S0rryHorizon/ntulearn-skill](https://github.com/S0rryHorizon/ntulearn-skill).
+  The official API returned `enabled: true`; the public Advisories page showed
+  **Report a vulnerability**. The actual entry and workflow are in `SECURITY.md`.
+  This was a separately authorized empty-repository setup: `isEmpty: true`, no
+  default branch commit, no uploaded code or artifacts, and no local remote.
+  No test vulnerability was submitted. Software publication remains unauthorized.
 - [ ] R3–R6: retained for a later scoped review; no implementation or completion
   claim is included in the R1/R2 follow-up.
 

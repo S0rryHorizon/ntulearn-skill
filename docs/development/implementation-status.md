@@ -110,10 +110,12 @@ unverifiable boundaries with bounded errors. Direct database paths also validate
 their containing directory to protect SQLite sidecars. No ignore rules or existing
 private data are modified by boundary validation.
 
-The maintainer selected GitHub Private vulnerability reporting for R2. Its workflow
-is documented, but R2 remains a publication blocker until the repository exists,
-the feature is enabled and its reporting entry is verified. No GitHub private
-reporting feature has been enabled. Ordinary non-sensitive issues and pull
+R2 is complete following separate, limited authorization to create the public empty
+repository `S0rryHorizon/ntulearn-skill` and enable GitHub Private vulnerability
+reporting. Official API readback returned `enabled: true` and `isEmpty: true`, with
+no default branch commit. The public Advisories page displayed **Report a vulnerability**;
+the actual form URL is documented in `SECURITY.md`. No report was submitted, no code
+or artifacts were uploaded, and no local remote was added. Ordinary non-sensitive issues and pull
 requests remain appropriate; private vulnerability details need a private channel.
 R3–R6 remain deferred and are not implemented by this follow-up.
 
@@ -124,5 +126,6 @@ checks; the full suite, live acceptance and existing private database were not r
 or changed for this follow-up.
 Independent review accepted the R1 diff and R2's pending status; its separate
 41-test boundary/storage run and additional synthetic probes passed. Wheel and
-sdist rebuilds and public-content audits passed. These outcomes do not close R2
-or authorize publication.
+sdist rebuilds and public-content audits passed. Those earlier checks did not close
+R2; the later reporting-channel verification above does. Software publication still
+requires separate authorization.

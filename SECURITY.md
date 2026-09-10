@@ -9,19 +9,22 @@ made for unpublished versions.
 
 ## Reporting a vulnerability
 
-**Public-release blocker: GitHub Private vulnerability reporting is selected but
-not yet enabled.** Before publication, the maintainer must establish the repository,
-enable the feature and verify that its Security page offers the reporting entry.
-The following reporting workflow applies once those steps are complete.
+GitHub **Private vulnerability reporting** is enabled for
+[S0rryHorizon/ntulearn-skill](https://github.com/S0rryHorizon/ntulearn-skill).
+The repository currently contains no project code or commits; enabling this reporting
+channel does not constitute a software release.
 
 For ordinary bugs, feature requests, and non-sensitive fixes, please open a public
 issue or pull request.
 
 If you discover a security vulnerability that has not yet been fixed, please do not
 disclose the details in a public issue or pull request. Instead, use GitHub's
-**Private vulnerability reporting** feature from the repository's **Security** page.
-Until that feature is available, a public issue may ask for a security contact
-without disclosing the vulnerability details.
+**Private vulnerability reporting** feature: open **Security and quality → Advisories
+→ Report a vulnerability**, or use the
+[private report form](https://github.com/S0rryHorizon/ntulearn-skill/security/advisories/new).
+Sign in to GitHub when prompted. The
+[Advisories page](https://github.com/S0rryHorizon/ntulearn-skill/security/advisories)
+provides the same reporting entry.
 
 Please avoid including real credentials, private data, or other unnecessary sensitive
 information in the report. Never include credentials, private data, authenticated
