@@ -463,7 +463,7 @@ def test_multiline_announcement_associates_date_time_and_venue_without_guessing_
 
     result = harness.extractor.extract_observation(observed.observation.key)
 
-    assert result.extractor_version == "5"
+    assert result.extractor_version == "6"
     assert len(result.candidates) == 1
     candidate = result.candidates[0]
     start = candidate.field(CandidateFieldName.START_TIME)
@@ -615,6 +615,187 @@ def test_context_window_does_not_merge_distinct_events(tmp_path: Path) -> None:
     assert quiz.field(CandidateFieldName.DUE_TIME) is None
     assert assignment.field(CandidateFieldName.DUE_TIME).value["date"] == "2030-05-10"  # type: ignore[index,union-attr]
     assert assignment.field(CandidateFieldName.START_TIME) is None
+
+
+def test_schedule_rows_use_only_their_own_preceding_date(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    observed = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "date-before-title-rows"),
+            harness.course_id,
+            "Synthetic schedule notice",
+            (
+                "Week # Monday (18:30 to 21:45)\n"
+                "Room: Shared Header Hall\n"
+                "7\n"
+                "14 September 2032\n"
+                "Breakout Tutorials Alpha\n"
+                "8\n"
+                "21 September 2032\n"
+                "Final Presentation Beta"
+            ),
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+
+    result = harness.extractor.extract_observation(observed.observation.key)
+
+    assert len(result.candidates) == 2
+    by_type = {
+        candidate.field(CandidateFieldName.EVENT_TYPE).value: candidate  # type: ignore[union-attr]
+        for candidate in result.candidates
+    }
+    tutorial = by_type["tutorial"]
+    presentation = by_type["presentation"]
+    assert tutorial.field(CandidateFieldName.START_TIME).value["date"] == "2032-09-14"  # type: ignore[index,union-attr]
+    assert presentation.field(CandidateFieldName.START_TIME).value["date"] == "2032-09-21"  # type: ignore[index,union-attr]
+    assert tutorial.field(CandidateFieldName.LOCATION) is None
+    assert presentation.field(CandidateFieldName.LOCATION) is None
+    assert tutorial.field(CandidateFieldName.END_TIME) is None
+    assert presentation.field(CandidateFieldName.END_TIME) is None
+
+
+def test_inline_date_before_title_uses_the_event_suffix_as_title(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    observed = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "inline-date-before-title"),
+            harness.course_id,
+            "Synthetic schedule notice",
+            "9 | 28 September 2032 | Breakout Tutorial Gamma",
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+
+    candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+
+    title = candidate.field(CandidateFieldName.TITLE)
+    start = candidate.field(CandidateFieldName.START_TIME)
+    assert title is not None and title.value == "Breakout Tutorial Gamma"
+    assert title.original_text == "Breakout Tutorial Gamma"
+    assert start is not None and start.value["date"] == "2032-09-28"  # type: ignore[index]
+
+
+def test_parenthetical_date_on_next_line_refines_week_without_header_fields(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    observed = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "next-line-week-refinement"),
+            harness.course_id,
+            "Synthetic assessment notice",
+            (
+                "Time: 18:30 to 21:45\n"
+                "Room: Shared Header Hall\n"
+                "Assignment Delta due on Week 12\n"
+                "(by 18 April 2032)\n"
+                "Venue: Invented Event Hall"
+            ),
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+
+    candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+
+    due = candidate.field(CandidateFieldName.DUE_TIME)
+    assert due is not None and due.precision is TemporalPrecision.DATE_ONLY
+    assert due.value["date"] == "2032-04-18"  # type: ignore[index]
+    assert candidate.field(CandidateFieldName.START_TIME) is None
+    assert candidate.field(CandidateFieldName.END_TIME) is None
+    location = candidate.field(CandidateFieldName.LOCATION)
+    assert location is not None and location.value == "Invented Event Hall"
+
+
+def test_submit_by_week_is_due_and_plural_weeks_remain_one_uncertain_scope(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    cases = (
+        ("single-week", "Assignment One\nSubmit by Week 10", [10], TemporalPrecision.WEEK_ONLY),
+        (
+            "plural-weeks",
+            "Assignment Two submit by Weeks 8, 10 and 12",
+            [8, 10, 12],
+            TemporalPrecision.UNKNOWN,
+        ),
+    )
+    for remote_key, body, expected_weeks, expected_precision in cases:
+        observed = harness.events.observe_announcement(
+            AnnouncementSourceRecord(
+                AnnouncementId("synthetic", remote_key),
+                harness.course_id,
+                "Synthetic assessment notice",
+                body,
+                Availability.ACTIVE,
+            ),
+            sync_run_key=_sync_run(harness.database),
+        )
+        result = harness.extractor.extract_observation(observed.observation.key)
+        assert len(result.candidates) == 1
+        candidate = result.candidates[0]
+        due = candidate.field(CandidateFieldName.DUE_TIME)
+        assert due is not None and due.precision is expected_precision
+        if len(expected_weeks) == 1:
+            assert due.value["week_number"] == expected_weeks[0]  # type: ignore[index]
+        else:
+            assert due.value["week_numbers"] == expected_weeks  # type: ignore[index]
+            assert due.value["instant"] is None  # type: ignore[index]
+        assert candidate.field(CandidateFieldName.START_TIME) is None
+
+
+def test_flattened_labels_keep_venue_but_stop_before_topics(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    bodies = (
+        (
+            "flattened-labels",
+            "Test 1 Date: 18 April 2032 Time: 09:00 to 10:00 "
+            "Venue: Invented Hall 3 Topics: synthetic vectors",
+        ),
+        (
+            "multiline-inline-labels",
+            "Test 1\nDate: 18 April 2032\nVenue: Invented Hall 3 Topics: synthetic vectors",
+        ),
+    )
+    for remote_key, body in bodies:
+        observed = harness.events.observe_announcement(
+            AnnouncementSourceRecord(
+                AnnouncementId("synthetic", remote_key),
+                harness.course_id,
+                "Synthetic test notice",
+                body,
+                Availability.ACTIVE,
+            ),
+            sync_run_key=_sync_run(harness.database),
+        )
+
+        candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+        location = candidate.field(CandidateFieldName.LOCATION)
+        assert location is not None and location.value == "Invented Hall 3"
+        assert location.original_text == "Venue: Invented Hall 3"
+
+
+def test_honorific_in_same_line_is_not_part_of_assignment_title(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    observed = harness.events.observe_announcement(
+        AnnouncementSourceRecord(
+            AnnouncementId("synthetic", "honorific-title"),
+            harness.course_id,
+            "Synthetic assignment notice",
+            "Dr. Rowan Vale Assignment 1 due on Week 10",
+            Availability.ACTIVE,
+        ),
+        sync_run_key=_sync_run(harness.database),
+    )
+
+    candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+
+    title = candidate.field(CandidateFieldName.TITLE)
+    assert title is not None and title.value == "Assignment 1"
+    assert title.original_text == "Assignment 1"
 
 
 def test_context_uses_first_event_date_and_ignores_later_labeled_assertions(

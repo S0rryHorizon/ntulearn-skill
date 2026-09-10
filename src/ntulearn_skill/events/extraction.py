@@ -33,7 +33,7 @@ _SETTINGS = {
     "context_maximum_segments": 6,
     "maximum_candidates": 1000,
     "maximum_mentions_per_chunk": 100,
-    "rule_revision": 5,
+    "rule_revision": 6,
 }
 _SETTINGS_JSON = json.dumps(_SETTINGS, sort_keys=True, separators=(",", ":"))
 _SETTINGS_HASH = hashlib.sha256(_SETTINGS_JSON.encode("utf-8")).hexdigest()
@@ -52,12 +52,14 @@ _DATE_TOKEN = rf"(?:\d{{4}}-\d{{2}}-\d{{2}}|{_HUMAN_DATE}|{_SLASH_DATE})"
 _ZONE = r"(?:[+-]\d{2}:\d{2}|SGT|UTC(?:[+-]\d{1,2})?|Z)"
 _ZONE_WRAPPED = rf"\(?{_ZONE}\)?"
 _CLOCK = r"(?:[01]?\d|2[0-3])[:.]\d{2}(?:\s*(?:a\.?m\.?|p\.?m\.?))?"
+_PLURAL_WEEK = r"Weeks\s+\d{1,2}(?:\s*(?:,\s*|and\s+|&\s*)\d{1,2})+"
 _TEMPORAL_PATTERN = re.compile(
     rf"\b(?:"
     rf"\d{{4}}-\d{{2}}-\d{{2}}[T ]\d{{1,2}}:\d{{2}}(?::\d{{2}})?"
     rf"(?:Z|\s?(?:[+-]\d{{2}}:\d{{2}}|SGT|UTC))"
     rf"|{_DATE_TOKEN},?\s+(?:at\s+)?{_CLOCK}(?:\s?{_ZONE_WRAPPED})"
     rf"|{_DATE_TOKEN}"
+    rf"|{_PLURAL_WEEK}"
     rf"|Week\s+\d{{1,2}}"
     rf")(?!\w)",
     flags=re.IGNORECASE,
@@ -71,7 +73,7 @@ _TIME_RANGE_PATTERN = re.compile(
 )
 _TIME_PATTERN = re.compile(rf"\b(?P<clock>{_CLOCK})(?:\s*(?P<zone>{_ZONE_WRAPPED}))?(?!\w)", re.I)
 _SPLIT = re.compile(
-    r"(?:\r?\n)+|;\s*|(?<=[.!?])\s+|"
+    r"(?:\r?\n)+|;\s*|(?<!Dr\.)(?<!Prof\.)(?<=[.!?])\s+|"
     r",\s*(?=(?:Assignment|Homework|Quiz|Test|Exam|Presentation|Tutorial|Lab|Lecture)\b)",
     re.I,
 )
@@ -81,7 +83,7 @@ _TYPE_PATTERNS: tuple[tuple[re.Pattern[str], EventType], ...] = (
     (re.compile(r"\b(?:term\s+test|midterm|test)\b", re.I), EventType.TEST),
     (re.compile(r"\bexam(?:ination)?\b", re.I), EventType.EXAM),
     (re.compile(r"\bpresentation\b", re.I), EventType.PRESENTATION),
-    (re.compile(r"\btutorial\b", re.I), EventType.TUTORIAL),
+    (re.compile(r"\btutorials?\b", re.I), EventType.TUTORIAL),
     (re.compile(r"\blab(?:oratory)?\b", re.I), EventType.LAB),
     (re.compile(r"\blecture\b", re.I), EventType.LECTURE),
     (re.compile(r"\b(?:project\s+milestone|milestone)\b", re.I), EventType.PROJECT_MILESTONE),
@@ -102,6 +104,11 @@ _CONDITIONAL_CHANGE_PATTERN = re.compile(r"\b(?:if|unless|whether)\b|\bin\s+case
 _ORDINAL = r"(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)"
 _LOCATION_PATTERN = re.compile(
     r"^\s*(?:[-*•]\s*)?(?:venue|location|room)\s*[:–—-]\s*(?P<location>\S.{0,199})$",
+    re.I,
+)
+_INLINE_LOCATION_PATTERN = re.compile(
+    r"\b(?:venue|location|room)\s*[:–—-]\s*(?P<location>\S.{0,199}?)"
+    r"(?=\s+\b(?:date|time|venue|location|room|topics?|duration|remarks?)\s*[:–—-]|\s*$)",
     re.I,
 )
 _FIELD_CONTINUATION_PATTERN = re.compile(
@@ -196,7 +203,7 @@ class DeterministicEventExtractor:
     """Extract reproducible candidates from structured observations or immutable chunks."""
 
     name = "deterministic-event-rules"
-    version = "5"
+    version = "6"
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -566,6 +573,7 @@ class DeterministicEventExtractor:
             event_type, keyword = self._event_type(anchor.text)
             if event_type is None:
                 continue
+            preceding_temporal = self._preceding_row_temporal(segments, index)
             block = [anchor]
             for following in segments[index + 1 : index + _SETTINGS["context_maximum_segments"]]:
                 if _ROW_BOUNDARY_PATTERN.fullmatch(following.text) is not None:
@@ -580,6 +588,7 @@ class DeterministicEventExtractor:
                     has_temporal_assertion is not None
                     and _FIELD_CONTINUATION_PATTERN.match(following.text) is None
                     and _FIELD_LABEL_ONLY_PATTERN.fullmatch(block[-1].text) is None
+                    and not self._is_parenthetical_week_refinement(following.text)
                 ):
                     break
                 if (
@@ -589,9 +598,13 @@ class DeterministicEventExtractor:
                     break
                 block.append(following)
             ordinal_prefix = (
-                segments[index - 1]
-                if index > 0 and _ORDINAL_ONLY_PATTERN.fullmatch(segments[index - 1].text)
-                else None
+                segments[index - 2]
+                if preceding_temporal is not None
+                else (
+                    segments[index - 1]
+                    if index > 0 and _ORDINAL_ONLY_PATTERN.fullmatch(segments[index - 1].text)
+                    else None
+                )
             )
             draft = self._draft_from_block(
                 tuple(block),
@@ -600,11 +613,32 @@ class DeterministicEventExtractor:
                 evidence_key,
                 source_kind,
                 ordinal_prefix=ordinal_prefix,
+                preceding_temporal=preceding_temporal,
                 numeric_date_order=numeric_date_order,
             )
             if draft is not None:
                 drafts.append(draft)
         return tuple(drafts)
+
+    @staticmethod
+    def _preceding_row_temporal(
+        segments: tuple[_TextSegment, ...], index: int
+    ) -> _TextSegment | None:
+        if index < 2 or _ROW_BOUNDARY_PATTERN.fullmatch(segments[index - 2].text) is None:
+            return None
+        preceding = segments[index - 1]
+        return preceding if _TEMPORAL_PATTERN.fullmatch(preceding.text) is not None else None
+
+    @staticmethod
+    def _is_parenthetical_week_refinement(text: str) -> bool:
+        return (
+            re.fullmatch(
+                rf"\(\s*(?:by|due(?:\s+on)?)\s+{_DATE_TOKEN}\s*\)",
+                text,
+                re.I,
+            )
+            is not None
+        )
 
     @staticmethod
     def _text_segments(
@@ -627,6 +661,7 @@ class DeterministicEventExtractor:
         source_kind: CandidateSourceKind,
         *,
         ordinal_prefix: _TextSegment | None,
+        preceding_temporal: _TextSegment | None,
         numeric_date_order: str | None,
     ) -> _CandidateDraft | None:
         if len(block) == 1 and ordinal_prefix is None:
@@ -636,7 +671,14 @@ class DeterministicEventExtractor:
                 else "text"
             )
             block = (_TextSegment(block[0].text, path),)
-        mention = "\n".join(segment.text for segment in block)
+        source_order_block = (
+            (preceding_temporal, *block) if preceding_temporal is not None else block
+        )
+        context_block = (
+            (block[0], preceding_temporal, *block[1:]) if preceding_temporal is not None else block
+        )
+        mention = "\n".join(segment.text for segment in context_block)
+        raw_mention = "\n".join(segment.text for segment in source_order_block)
         if _NEGATED_EVENT_PATTERN.search(block[0].text) is not None:
             return None
         temporals = list(_TEMPORAL_PATTERN.finditer(mention))
@@ -661,9 +703,21 @@ class DeterministicEventExtractor:
 
         anchor = block[0]
         anchor_temporal = _TEMPORAL_PATTERN.search(anchor.text)
-        boundary = anchor_temporal.start() if anchor_temporal is not None else len(anchor.text)
-        title = self._candidate_title(anchor.text, boundary)
-        title_text = anchor.text[:boundary].strip(" :-–—\t") or title
+        keyword_match = re.search(re.escape(keyword), anchor.text, re.I)
+        date_before_title = (
+            anchor_temporal is not None
+            and keyword_match is not None
+            and anchor_temporal.end() <= keyword_match.start()
+        )
+        title_source = (
+            anchor.text[anchor_temporal.end() :]
+            if date_before_title and anchor_temporal is not None
+            else anchor.text
+        )
+        title_temporal = _TEMPORAL_PATTERN.search(title_source)
+        boundary = title_temporal.start() if title_temporal is not None else len(title_source)
+        title = self._candidate_title(title_source, boundary)
+        title_text = title_source[:boundary].strip(" :-–—|\t") or title
         title_path = anchor.source_path
         title_offset = title_text.casefold().find(title.casefold())
         if title_offset > 0:
@@ -704,7 +758,7 @@ class DeterministicEventExtractor:
                     CandidateFieldName.STATUS,
                     "CANCELLED",
                     cancellation.group(0),
-                    source_path=self._path_for_offset(block, cancellation.start()),
+                    source_path=self._path_for_offset(context_block, cancellation.start()),
                 )
             )
         if venue_change is not None:
@@ -714,17 +768,21 @@ class DeterministicEventExtractor:
                     CandidateFieldName.LOCATION,
                     location,
                     location,
-                    source_path=self._path_for_offset(block, venue_change.start("location")),
+                    source_path=self._path_for_offset(
+                        context_block, venue_change.start("location")
+                    ),
                 )
             )
         else:
-            location_field = self._location_from_block(block)
+            location_field = self._location_from_block(context_block)
             if location_field is not None:
                 fields.append(location_field)
         if not temporals:
-            return _CandidateDraft(source_kind, mention[:4096], 0.8, evidence_key, tuple(fields))
+            return _CandidateDraft(
+                source_kind, raw_mention[:4096], 0.8, evidence_key, tuple(fields)
+            )
 
-        due_marker = self._due_marker(block, mention, event_type)
+        due_marker = self._due_marker(context_block, mention, event_type)
         is_due = due_marker is not None
         if due_marker is not None:
             temporals = [item for item in temporals if item.start() >= due_marker.end()]
@@ -739,15 +797,15 @@ class DeterministicEventExtractor:
                 if not temporals:
                     return None
             elif _NON_START_TEMPORAL_PATTERN.search(
-                self._segment_prefix_for_offset(block, temporals[0].start())
+                self._segment_prefix_for_offset(context_block, temporals[0].start())
             ):
                 return None
-        if self._selected_temporal_is_negated(block, temporals[0].start()):
+        if self._selected_temporal_is_negated(context_block, temporals[0].start()):
             return None
 
         first_name = CandidateFieldName.DUE_TIME if is_due else CandidateFieldName.START_TIME
         temporal_fields = self._temporal_fields_from_block(
-            block,
+            context_block,
             mention,
             temporals,
             first_name,
@@ -756,7 +814,7 @@ class DeterministicEventExtractor:
         if not temporal_fields:
             return None
         fields.extend(temporal_fields)
-        return _CandidateDraft(source_kind, mention[:4096], 0.8, evidence_key, tuple(fields))
+        return _CandidateDraft(source_kind, raw_mention[:4096], 0.8, evidence_key, tuple(fields))
 
     @staticmethod
     def _due_marker(
@@ -772,8 +830,10 @@ class DeterministicEventExtractor:
             return None
         return re.search(
             rf"(?im)(?:^\s*(?:[-*•]\s*)?"
-            rf"(?:due(?:\s+date)?|deadline|submission\s+deadline)\s*:?(?=\s*(?:{_DATE_TOKEN})|\s*$)"
-            rf"|\bby(?=\s+(?:{_DATE_TOKEN})))",
+            rf"(?:due(?:\s+date)?|deadline|submission\s+deadline)\s*:?"
+            rf"(?=\s*(?:{_DATE_TOKEN}|{_PLURAL_WEEK}|Week\s+\d{{1,2}})|\s*$)"
+            rf"|^\s*submit\s+by(?=\s+(?:{_DATE_TOKEN}|{_PLURAL_WEEK}|Week\s+\d{{1,2}}))"
+            rf"|\bby(?=\s+(?:{_DATE_TOKEN}|{_PLURAL_WEEK}|Week\s+\d{{1,2}})))",
             mention,
         )
 
@@ -792,7 +852,10 @@ class DeterministicEventExtractor:
             same_segment = self._path_for_span(
                 block, first.start(), first.end()
             ) == self._path_for_span(block, refinement.start(), refinement.end())
-            if same_segment and re.search(
+            parenthetical_refinement = self._is_parenthetical_week_refinement(
+                self._segment_for_offset(block, refinement.start()).text
+            )
+            if (same_segment or parenthetical_refinement) and re.search(
                 r"\(\s*(?:by|due(?:\s+on)?)\s*$",
                 mention[first.end() : refinement.start()],
                 re.I,
@@ -919,9 +982,13 @@ class DeterministicEventExtractor:
 
     @staticmethod
     def _location_from_block(block: tuple[_TextSegment, ...]) -> _FieldDraft | None:
-        for index, segment in enumerate(block[1:], start=1):
-            match = _LOCATION_PATTERN.fullmatch(segment.text)
-            if match is not None:
+        for index, segment in enumerate(block):
+            inline = _INLINE_LOCATION_PATTERN.search(segment.text)
+            if inline is not None:
+                location = inline.group("location").strip()
+                original_text = inline.group(0).strip()
+                source_path = segment.source_path
+            elif (match := _LOCATION_PATTERN.fullmatch(segment.text)) is not None:
                 location = match.group("location").strip()
                 original_text = segment.text
                 source_path = segment.source_path
@@ -957,13 +1024,17 @@ class DeterministicEventExtractor:
 
     @staticmethod
     def _path_for_offset(block: tuple[_TextSegment, ...], offset: int) -> str:
+        return DeterministicEventExtractor._segment_for_offset(block, offset).source_path
+
+    @staticmethod
+    def _segment_for_offset(block: tuple[_TextSegment, ...], offset: int) -> _TextSegment:
         consumed = 0
         for segment in block:
             end = consumed + len(segment.text)
             if offset <= end:
-                return segment.source_path
+                return segment
             consumed = end + 1
-        return block[-1].source_path
+        return block[-1]
 
     @classmethod
     def _path_for_span(cls, block: tuple[_TextSegment, ...], start: int, end: int) -> str:
@@ -1189,14 +1260,15 @@ class DeterministicEventExtractor:
 
     @staticmethod
     def _candidate_title(text: str, temporal_start: int) -> str:
-        prefix = text[:temporal_start].strip(" :-–—\t")
+        prefix = text[:temporal_start].strip(" :-–—|\t")
         prefix = re.sub(
-            r"\b(?:is|will be|due(?:\s+(?:on|date))?|deadline|on|at|from)\s*$",
+            r"\b(?:is|will be|due(?:\s+(?:on|date))?|deadline|on|at|from|"
+            r"submit(?:ted)?\s+(?:by|before))\s*$",
             "",
             prefix,
             flags=re.I,
         )
-        prefix = prefix.strip(" :-–—\t")
+        prefix = prefix.strip(" :-–—|\t")
         prefix = re.sub(
             r"^(?:(?:Instructor|Lecturer|Tutor|Professor|Prof|Dr)\.?\s*[:–—-]?\s+)"
             r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+"
@@ -1278,6 +1350,25 @@ class DeterministicEventExtractor:
         numeric_date_order: str | None = None,
     ) -> _FieldDraft:
         normalized = source_text.strip()
+        if re.fullmatch(_PLURAL_WEEK, normalized, re.I):
+            week_numbers = [int(value) for value in re.findall(r"\d{1,2}", normalized)]
+            if any(not 1 <= value <= 53 for value in week_numbers):
+                raise ValueError("week number is invalid")
+            week_values: list[JsonValue] = list(week_numbers)
+            scope_value: dict[str, JsonValue] = {
+                "instant": None,
+                "precision": TemporalPrecision.UNKNOWN.value,
+                "source_text": source_text,
+                "source_timezone": None,
+                "week_numbers": week_values,
+            }
+            return _FieldDraft(
+                name,
+                scope_value,
+                source_text,
+                TemporalPrecision.UNKNOWN,
+                source_path=source_path,
+            )
         if re.fullmatch(r"Week\s+\d{1,2}", normalized, re.I):
             week_number = int(normalized.rsplit(maxsplit=1)[-1])
             if not 1 <= week_number <= 53:
