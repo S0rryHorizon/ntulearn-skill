@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 from collections.abc import Mapping
@@ -9,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 RUNTIME_ROOT_ENV = "NTULEARN_DATA_DIR"
+RUNTIME_CONFIG_NAME = "config.json"
+_RUNTIME_CONFIG_MAX_BYTES = 65_536
 
 
 class RuntimePathError(ValueError):
@@ -73,6 +76,57 @@ def ensure_private_directory(directory: Path, *, boundary: Path | None = None) -
     os.chmod(directory, 0o700, follow_symlinks=False)
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate configuration key")
+        result[key] = value
+    return result
+
+
+def _runtime_root_from_host_config(home: Path) -> str | None:
+    config_path = home / ".ntulearn-skill" / RUNTIME_CONFIG_NAME
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(config_path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise RuntimePathError("runtime root configuration could not be read") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimePathError("runtime root configuration must be a regular file")
+        if metadata.st_size > _RUNTIME_CONFIG_MAX_BYTES:
+            raise RuntimePathError("runtime root configuration is too large")
+        if stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise RuntimePathError("runtime root configuration permissions are not private")
+        with os.fdopen(descriptor, encoding="utf-8") as stream:
+            descriptor = -1
+            raw = stream.read(_RUNTIME_CONFIG_MAX_BYTES + 1)
+    except (OSError, UnicodeError) as error:
+        raise RuntimePathError("runtime root configuration could not be read") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(raw.encode("utf-8")) > _RUNTIME_CONFIG_MAX_BYTES:
+        raise RuntimePathError("runtime root configuration is too large")
+    try:
+        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_json_keys)
+    except (json.JSONDecodeError, ValueError) as error:
+        raise RuntimePathError("runtime root configuration is invalid") from error
+    if not isinstance(payload, dict) or set(payload) != {"runtime_root"}:
+        raise RuntimePathError("runtime root configuration is invalid")
+    configured = payload.get("runtime_root")
+    if not isinstance(configured, str) or not configured.strip():
+        raise RuntimePathError("runtime root configuration is invalid")
+    if not Path(configured).is_absolute():
+        raise RuntimePathError("configured runtime root must be an absolute path")
+    return configured
+
+
 def resolve_runtime_root(
     explicit: str | Path | None = None,
     *,
@@ -91,6 +145,8 @@ def resolve_runtime_root(
     home_directory = Path.home() if home is None else home
     environment_value = environment.get(RUNTIME_ROOT_ENV)
     configured = explicit if explicit is not None else environment_value or None
+    if configured is None:
+        configured = _runtime_root_from_host_config(home_directory)
     is_explicit = configured is not None
     candidate = (
         Path(configured).expanduser()

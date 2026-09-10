@@ -2,8 +2,10 @@
 
 ## Select the private runtime and course
 
-Use the user's configured private runtime root. If none was supplied, the CLI default is
-`~/.ntulearn-skill/`. First run:
+Use the user's configured private runtime root. The CLI discovers it in this order:
+`--root`, `NTULEARN_DATA_DIR`, private host file `~/.ntulearn-skill/config.json`, then
+the default `~/.ntulearn-skill/`. The host file contains an absolute `runtime_root` and
+must stay outside the installed Skill and public repository. First run:
 
 ```console
 ntulearn --json courses --freshness cache-only
@@ -17,9 +19,9 @@ coverage, then ask the user to choose. Never combine courses silently.
 
 Within one task, retain the selected runtime root and local course key so follow-up
 questions resume without another selection round. If the runtime root changes or a later
-`courses` result no longer contains that key, select again. The CLI currently has no
-default-course configuration file; any host-side durable preference must remain under a
-private runtime/config location outside the repository and must be revalidated with
+`courses` result no longer contains that key, select again. The host configuration
+selects only the runtime root, not a default course. Any durable course preference must
+remain in private host state outside the repository and must be revalidated with
 `courses` before use.
 
 `library-status` reports content-node counts and file-backed download, parse, and index
@@ -60,6 +62,30 @@ ntulearn --json search "presentation" --course COURSE_KEY --freshness cache-only
 
 This decomposition lets a Chinese question retrieve English source evidence. Adjust the
 variants to the user's wording; do not execute every example term when it is irrelevant.
+
+## Present an upcoming window conservatively
+
+Do not describe every item returned by `upcoming` as confirmed inside the requested
+window. Core deliberately retains an event when any relevant temporal evidence is
+unbounded because it may overlap. Inspect `start_time`, `end_time`, `due_time`, open
+conflicting claims, `precision`, `date`, `local_time`, `week`, and `source_text` before
+presenting it.
+
+- Put an exact instant inside the window under confirmed upcoming work.
+- For `DATE_ONLY` inside the requested calendar-date range, say the date is known and
+  the specific time is unconfirmed. Do not invent a timezone.
+- If an exact instant or source date is clearly before the requested window, omit it
+  from the main upcoming list or label it as past evidence.
+- Put `WEEK_ONLY`, `UNKNOWN`, and a `local_time` without a source date in a separate
+  “时间未定位” group. Quote the retained source wording and never claim it falls within
+  the next N days.
+- If open alternatives cross the window boundary, show the conflict instead of choosing
+  the convenient date.
+
+Synthetic example for a request covering `[D, D+7)`: an exact `D+2` deadline is
+confirmed; a source date `D-1` is past; `Week 4` and `14:00` without a date are both
+“时间未定位”. The latter two remain visible because the Core result is conservative,
+not because their membership in the seven-day window was established.
 
 ## Empty events and evidence fallbacks
 

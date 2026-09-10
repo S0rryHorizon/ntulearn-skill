@@ -43,12 +43,25 @@ contains the SQLite database, content-addressed objects, browse views, indexes, 
 logs and other private state. Directories are created with owner-only permissions where
 the platform supports them.
 
-Choose another private root either per command or through the environment:
+Choose another private root per command, through the environment, or through the
+standard private host configuration:
 
 ```console
 ntulearn --root /private/path/ntulearn-runtime courses
 NTULEARN_DATA_DIR=/private/path/ntulearn-runtime ntulearn courses
+mkdir -p ~/.ntulearn-skill
+chmod 700 ~/.ntulearn-skill
+printf '%s\n' '{"runtime_root":"/private/path/ntulearn-runtime"}' > ~/.ntulearn-skill/config.json
+chmod 600 ~/.ntulearn-skill/config.json
+ntulearn courses
 ```
+
+The configured `runtime_root` must be an absolute path. Resolution precedence is
+`--root`, then non-empty `NTULEARN_DATA_DIR`, then
+`~/.ntulearn-skill/config.json`, then the default `~/.ntulearn-skill/` directory. The
+host file stays private and must never be added to this repository. This lets a newly
+started Skill session discover the same local library without embedding a machine path
+in the installed Skill.
 
 Do not point the runtime at a tracked source directory. An explicit path below this
 repository's ignored `.local/` directory is accepted for development. For an isolated

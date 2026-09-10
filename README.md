@@ -72,9 +72,11 @@ be installed by path; the development workflow and exact validation commands are
 
 ## Query the private local store
 
-The default runtime root is `~/.ntulearn-skill/`. Set `NTULEARN_DATA_DIR` or pass
-`--root PRIVATE_ROOT` to use another private path. A path inside a Git checkout is
-rejected unless it is explicitly below that checkout's ignored `.local/` directory.
+The default runtime root is `~/.ntulearn-skill/`. Set `NTULEARN_DATA_DIR`, pass
+`--root PRIVATE_ROOT`, or store an absolute `runtime_root` in the private host file
+`~/.ntulearn-skill/config.json`. That order is also the precedence order. A path inside
+a Git checkout is rejected unless it is explicitly below that checkout's ignored
+`.local/` directory.
 
 ```console
 ntulearn --json courses

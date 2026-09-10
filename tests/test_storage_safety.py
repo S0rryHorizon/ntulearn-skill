@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import stat
@@ -48,6 +49,119 @@ def test_blank_runtime_environment_value_uses_home_default(tmp_path: Path) -> No
     root = resolve_runtime_root(environ={"NTULEARN_DATA_DIR": ""}, cwd=tmp_path, home=home)
 
     assert root == home / ".ntulearn-skill"
+
+
+def test_runtime_root_uses_private_host_config(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    configured_root = tmp_path / "existing-library"
+    config = home / ".ntulearn-skill" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"runtime_root": str(configured_root)}), encoding="utf-8")
+    config.chmod(0o600)
+
+    root = resolve_runtime_root(environ={}, cwd=tmp_path, home=home)
+
+    assert root == configured_root
+
+
+def test_explicit_and_environment_roots_override_host_config(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    config = home / ".ntulearn-skill" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"runtime_root": str(tmp_path / "configured")}), encoding="utf-8")
+    config.chmod(0o600)
+
+    environment_root = tmp_path / "environment"
+    explicit_root = tmp_path / "explicit"
+
+    assert (
+        resolve_runtime_root(
+            environ={"NTULEARN_DATA_DIR": str(environment_root)}, cwd=tmp_path, home=home
+        )
+        == environment_root
+    )
+    assert (
+        resolve_runtime_root(
+            explicit_root,
+            environ={"NTULEARN_DATA_DIR": str(environment_root)},
+            cwd=tmp_path,
+            home=home,
+        )
+        == explicit_root
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        "not-json",
+        json.dumps({}),
+        json.dumps({"runtime_root": "relative/path"}),
+    ),
+)
+def test_invalid_private_host_config_is_rejected(tmp_path: Path, payload: str) -> None:
+    home = tmp_path / "home"
+    config = home / ".ntulearn-skill" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(payload, encoding="utf-8")
+    config.chmod(0o600)
+
+    with pytest.raises(RuntimePathError, match="runtime root configuration|absolute path"):
+        resolve_runtime_root(environ={}, cwd=tmp_path, home=home)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        json.dumps({"runtime_root": "/private/synthetic", "unexpected": True}),
+        '{"runtime_root":"/private/one","runtime_root":"/private/two"}',
+    ),
+)
+def test_ambiguous_private_host_config_is_rejected(tmp_path: Path, payload: str) -> None:
+    home = tmp_path / "home"
+    config = home / ".ntulearn-skill" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(payload, encoding="utf-8")
+    config.chmod(0o600)
+
+    with pytest.raises(RuntimePathError, match="runtime root configuration is invalid"):
+        resolve_runtime_root(environ={}, cwd=tmp_path, home=home)
+
+
+def test_private_host_config_rejects_unsafe_file_forms(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    config = home / ".ntulearn-skill" / "config.json"
+    config.parent.mkdir(parents=True)
+    target = tmp_path / "target.json"
+    target.write_text(json.dumps({"runtime_root": str(tmp_path / "runtime")}), encoding="utf-8")
+    target.chmod(0o600)
+    config.symlink_to(target)
+
+    with pytest.raises(RuntimePathError, match="could not be read"):
+        resolve_runtime_root(environ={}, cwd=tmp_path, home=home)
+
+    config.unlink()
+    os.mkfifo(config, mode=0o600)
+    with pytest.raises(RuntimePathError, match="regular file"):
+        resolve_runtime_root(environ={}, cwd=tmp_path, home=home)
+
+
+def test_private_host_config_requires_private_permissions_and_bounded_size(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    config = home / ".ntulearn-skill" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"runtime_root": str(tmp_path / "runtime")}), encoding="utf-8")
+    config.chmod(0o644)
+
+    with pytest.raises(RuntimePathError, match="permissions are not private"):
+        resolve_runtime_root(environ={}, cwd=tmp_path, home=home)
+
+    config.write_text("x" * 65_537, encoding="utf-8")
+    config.chmod(0o600)
+    with pytest.raises(RuntimePathError, match="too large"):
+        resolve_runtime_root(environ={}, cwd=tmp_path, home=home)
 
 
 def test_local_symlink_cannot_alias_a_tracked_directory(tmp_path: Path) -> None:
