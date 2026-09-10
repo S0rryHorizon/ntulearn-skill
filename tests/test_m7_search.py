@@ -461,6 +461,12 @@ def test_event_title_and_claims_keep_field_level_observation_evidence(tmp_path: 
 
 def test_locator_claim_resolves_exact_version_and_fts_rolls_back_with_event(tmp_path: Path) -> None:
     harness = _harness(tmp_path)
+    other_course = CourseId("synthetic", "m7-search-unrelated-course")
+    DomainRepository(harness.database).put_course(
+        other_course,
+        code="PH9999",
+        title="Unrelated Projection Course",
+    )
     title = "Locator Backed Quiz"
     with harness.database.transaction() as connection:
         object_key = _source_object(connection, harness, "locator-document", "attachment")
@@ -577,6 +583,66 @@ def test_locator_claim_resolves_exact_version_and_fts_rolls_back_with_event(tmp_
     assert resolved.version_key == version_key
     assert tuple(chunk.key for chunk in resolved.chunks) == (chunk_key,)
 
+    with harness.database.connect() as connection:
+        unrelated_before = connection.execute(
+            """SELECT search_document_key FROM search_document
+            WHERE entity_kind = 'course' AND course_key <> ?""",
+            (harness.course_key,),
+        ).fetchone()
+        canonical_before = tuple(
+            int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in ("resource_version", "event_candidate", "event", "claim")
+        )
+    assert unrelated_before is not None
+
+    # Model an index damaged by the old resource-only refresh, then perform the same resource
+    # metadata write made by a normal repeated sync.  The next search must repair the complete
+    # owning-course projection while leaving another course's derived row untouched.
+    with harness.database.transaction() as connection:
+        connection.execute(
+            """DELETE FROM search_document
+            WHERE resource_key = ? AND entity_kind IN ('event', 'claim')""",
+            (resource_key,),
+        )
+        connection.execute(
+            "UPDATE resource SET display_title = ? WHERE resource_key = ?",
+            ("Changed Synthetic Locator Document", resource_key),
+        )
+        state = connection.execute(
+            """SELECT source_generation, indexed_generation FROM search_index_state
+            WHERE singleton_key = 1"""
+        ).fetchone()
+        assert state is not None and int(state["source_generation"]) > int(
+            state["indexed_generation"]
+        )
+
+    repaired_event = search.search(
+        SearchQuery(title, SearchFilters(entity_kinds=frozenset({SearchEntityKind.EVENT})))
+    )
+    repaired_claim = search.search(
+        SearchQuery(title, SearchFilters(entity_kinds=frozenset({SearchEntityKind.CLAIM})))
+    )
+    changed_material = search.search(
+        SearchQuery(
+            "Changed Synthetic Locator Document",
+            SearchFilters(entity_kinds=frozenset({SearchEntityKind.MATERIAL})),
+        )
+    )
+    assert repaired_event.items and repaired_claim.items and changed_material.items
+    with harness.database.connect() as connection:
+        unrelated_after = connection.execute(
+            """SELECT search_document_key FROM search_document
+            WHERE entity_kind = 'course' AND course_key <> ?""",
+            (harness.course_key,),
+        ).fetchone()
+        canonical_after = tuple(
+            int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in ("resource_version", "event_candidate", "event", "claim")
+        )
+    assert unrelated_after is not None
+    assert int(unrelated_after[0]) == int(unrelated_before[0])
+    assert canonical_after == canonical_before
+
     with pytest.raises(RuntimeError, match="synthetic rollback"):
         with harness.database.transaction() as connection:
             rollback_title = "Rolledbackeventbeacon"
@@ -640,3 +706,16 @@ def test_locator_claim_resolves_exact_version_and_fts_rolls_back_with_event(tmp_
             SearchFilters(entity_kinds=frozenset({SearchEntityKind.EVENT})),
         )
     ).items
+
+    with harness.database.transaction() as connection:
+        connection.execute(
+            "UPDATE claim SET decision_state = 'SUPERSEDED' WHERE claim_key = ?",
+            (title_claim,),
+        )
+    assert not search.search(
+        SearchQuery(title, SearchFilters(entity_kinds=frozenset({SearchEntityKind.EVENT})))
+    ).items
+    superseded = search.search(
+        SearchQuery(title, SearchFilters(entity_kinds=frozenset({SearchEntityKind.CLAIM})))
+    )
+    assert superseded.items and "SUPERSEDED" in superseded.items[0].matching_text

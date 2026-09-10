@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from reportlab.pdfgen import canvas
 
 from ntulearn_skill.cli import run
 from ntulearn_skill.client import (
@@ -44,6 +45,33 @@ def _invoke(runtime: Path, manifest: Path, *arguments: str) -> tuple[int, dict[s
         stdout=output,
     )
     return code, json.loads(output.getvalue())
+
+
+def _write_searchable_pdf(path: Path, text: str) -> None:
+    output = io.BytesIO()
+    document = canvas.Canvas(output, pagesize=(612, 792), invariant=1)
+    document.drawString(72, 720, text)
+    document.save()
+    path.write_bytes(output.getvalue())
+
+
+def _logical_search_hits(result: dict[str, object]) -> tuple[tuple[object, ...], ...]:
+    return tuple(
+        sorted(
+            (
+                item["entity_kind"],
+                item["entity_key"],
+                item["version_key"],
+                item["chunk_key"],
+                item["text_origin"],
+                item["source"]["kind"],
+                item["source"]["key"],
+                item["title"],
+                item["matching_text"],
+            )
+            for item in result["items"]  # type: ignore[union-attr]
+        )
+    )
 
 
 def test_manifest_maps_visible_fields_and_derives_unobserved_namespaces(tmp_path: Path) -> None:
@@ -256,6 +284,11 @@ def test_cli_sync_uses_capture_through_existing_pipeline_and_replay_is_idempoten
 ) -> None:
     captured_at = datetime.now(UTC)
     manifest = write_synthetic_browser_bundle(tmp_path / "bundle", captured_at)
+    keyword = "Projectionrepairbeacon"
+    _write_searchable_pdf(
+        manifest.parent / "files" / "synthetic-course-overview.pdf",
+        f"Quiz {keyword} is due 2036-09-04 10:00 UTC.",
+    )
     runtime = tmp_path / "runtime"
 
     first_code, first = _invoke(runtime, manifest, "sync", "--verify")
@@ -263,7 +296,15 @@ def test_cli_sync_uses_capture_through_existing_pipeline_and_replay_is_idempoten
     assert first["completeness"] == "UNKNOWN"
 
     database = Database(runtime / "db" / "metadata.sqlite3")
-    tables = ("resource_version", "parsed_document", "event_candidate", "event", "local_job")
+    tables = (
+        "resource_version",
+        "parsed_document",
+        "event_candidate",
+        "event_source",
+        "event",
+        "claim",
+        "local_job",
+    )
     with database.connect() as connection:
         before = {
             table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
@@ -279,6 +320,10 @@ def test_cli_sync_uses_capture_through_existing_pipeline_and_replay_is_idempoten
     assert request["capture_id"] == "synthetic-capture-0001"
     assert request["capture_content_source_path"].endswith("/outline")
     assert assessment_count == 1
+    first_search_code, first_search = _invoke(runtime, manifest, "search", keyword)
+    assert first_search_code in {0, 2}
+    first_hits = _logical_search_hits(first_search)
+    assert {hit[0] for hit in first_hits} >= {"chunk", "event", "claim"}
 
     second_code, second = _invoke(runtime, manifest, "sync", "--verify")
     assert second_code == 2
@@ -304,6 +349,37 @@ def test_cli_sync_uses_capture_through_existing_pipeline_and_replay_is_idempoten
     assert any(
         warning["code"] == "capture_replay_assumed_not_reverified" for warning in second["warnings"]
     )
+    repeated_search_code, repeated_search = _invoke(runtime, manifest, "search", keyword)
+    assert repeated_search_code in {0, 2}
+    assert _logical_search_hits(repeated_search) == first_hits
+
+    # A repeat capture must also repair a database whose derived event/claim rows were damaged by
+    # the former resource-only projection refresh while its generation still appeared current.
+    with database.transaction() as connection:
+        connection.execute(
+            """DELETE FROM search_document
+            WHERE resource_key IS NOT NULL AND entity_kind IN ('event', 'claim')"""
+        )
+        state = connection.execute(
+            """SELECT source_generation, indexed_generation FROM search_index_state
+            WHERE singleton_key = 1"""
+        ).fetchone()
+        assert state is not None and int(state["source_generation"]) == int(
+            state["indexed_generation"]
+        )
+
+    repair_code, repair = _invoke(runtime, manifest, "sync", "--verify")
+    assert repair_code == 2
+    assert repair["completeness"] == "UNKNOWN"
+    repaired_search_code, repaired_search = _invoke(runtime, manifest, "search", keyword)
+    assert repaired_search_code in {0, 2}
+    assert _logical_search_hits(repaired_search) == first_hits
+    with database.connect() as connection:
+        repaired_counts = {
+            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in tables
+        }
+    assert repaired_counts == before
 
 
 def test_cache_only_cli_does_not_open_supplied_capture(tmp_path: Path) -> None:

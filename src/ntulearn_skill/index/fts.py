@@ -142,7 +142,7 @@ class SearchIndex:
 
     @classmethod
     def refresh_dirty(cls, connection: sqlite3.Connection) -> IndexRebuildResult:
-        """Refresh only courses or resources dirtied by the current transaction."""
+        """Refresh complete projections for courses touched by dirty resources."""
 
         state = connection.execute(
             """SELECT source_generation, indexed_generation
@@ -156,10 +156,10 @@ class SearchIndex:
             # before the first search may also queue a narrow dirty subset; that
             # subset must not hide canonical rows created by older migrations.
             return cls._rebuild_documents(connection)
-        dirty_courses = tuple(
+        dirty_courses = {
             int(row[0])
             for row in connection.execute("SELECT course_key FROM search_dirty_course ORDER BY 1")
-        )
+        }
         dirty_resources = tuple(
             int(row[0])
             for row in connection.execute(
@@ -171,7 +171,30 @@ class SearchIndex:
             # migrations could already contain canonical rows.
             return cls._rebuild_documents(connection)
 
-        for course_key in dirty_courses:
+        # Event and claim documents can carry a resource key through their source locator.
+        # Replacing only material/chunk rows for a dirty resource would therefore delete those
+        # projections without recreating them.  Include both the resource's current owner and any
+        # course represented by its existing derived rows so a move or deletion also clears the
+        # old course projection coherently.
+        affected_courses = set(dirty_courses)
+        for resource_key in dirty_resources:
+            affected_courses.update(
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT course_key FROM search_document WHERE resource_key = ?",
+                    (resource_key,),
+                )
+            )
+            row = connection.execute(
+                """SELECT n.course_key FROM resource r
+                JOIN content_node n ON n.content_key = r.content_key
+                WHERE r.resource_key = ?""",
+                (resource_key,),
+            ).fetchone()
+            if row is not None:
+                affected_courses.add(int(row["course_key"]))
+
+        for course_key in sorted(affected_courses):
             connection.execute("DELETE FROM search_document WHERE course_key = ?", (course_key,))
             cls._insert_courses(connection, course_key=course_key)
             cls._insert_content(connection, course_key=course_key)
@@ -182,22 +205,6 @@ class SearchIndex:
             cls._insert_materials(connection, course_key=course_key)
             cls._insert_native_chunks(connection, course_key=course_key)
             cls._insert_derived_chunks(connection, course_key=course_key)
-
-        for resource_key in dirty_resources:
-            row = connection.execute(
-                """SELECT n.course_key FROM resource r
-                JOIN content_node n ON n.content_key = r.content_key
-                WHERE r.resource_key = ?""",
-                (resource_key,),
-            ).fetchone()
-            if row is not None and int(row["course_key"]) in dirty_courses:
-                continue
-            connection.execute(
-                "DELETE FROM search_document WHERE resource_key = ?", (resource_key,)
-            )
-            cls._insert_materials(connection, resource_key=resource_key)
-            cls._insert_native_chunks(connection, resource_key=resource_key)
-            cls._insert_derived_chunks(connection, resource_key=resource_key)
 
         connection.execute("DELETE FROM search_dirty_course")
         connection.execute("DELETE FROM search_dirty_resource")
