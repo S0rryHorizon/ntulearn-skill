@@ -39,9 +39,16 @@ wiring from historical browser-tool errors; see [the diagnosis](connection-follo
 | Change | Status | Main commit | Evidence / remaining limits |
 | --- | --- | --- | --- |
 | Restarted raw API resource context | PASS | `c7104f1` | 467 implementation tests; supervisor regression 4 passed; independent critical review 116 focused tests passed; staged privacy audit 148 files passed. Bounded incomplete rediscovery fails before streaming and preserves cache. Raw API live protocol remains unvalidated. |
-| Browser host provider and normal entry | IN PROGRESS | — | Fresh bounded CLI import and local provenance observed; independent review and final integrated acceptance pending. |
-| Contextual native-text event extraction | IN PROGRESS | — | Frozen private baseline: 0/8 source-local event mentions found; repair and independent full-sample reevaluation pending. |
+| Browser host provider and normal entry | PASS (implementation) | `e3ffd60` | 482 implementation tests; independent provider review 37 focused tests and integrated review 33 tests passed. Installed-wheel CLI imported the bounded real capture; second fresh download remains pending. |
+| Contextual native-text event extraction | PASS (implementation and bounded evaluation) | `f67db02` | 474 implementation tests; final independent critical review 39 focused tests passed. Frozen real evaluation: 5/8 mentions, 0 false positives, 17/18 matched fields correct, 18/18 complete provenance paths; three image-only dates and generic-title limitation remain. |
+| Resource-backed event/Claim search preservation | PASS | `c6a15c0` | Independent critical review and two focused regressions passed. Installed CLI repaired the existing private index; repeat/replay/simulated-expiry checks preserved four logical search hits and all canonical counts. |
 
 The currently blocked live operation is a second original-file download: the native
 browser tool reports the Mac is locked. This is separate from the earlier API-navigation
 `BLOCKED_BY_CLIENT` error. No alternate transport was attempted.
+
+Integrated follow-up verification: **498 tests passed** on Python 3.12; Ruff check and
+format, strict mypy (59 source files), compile, wheel/sdist build and public artifact
+audits passed. The installed local CLI and browser Skill are available; host-assisted
+fresh collection requires the documented connected Chrome host. No remote or publication
+was performed. Full second-download live acceptance remains pending, not PASS.

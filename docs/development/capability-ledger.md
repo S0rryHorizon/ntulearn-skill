@@ -130,9 +130,11 @@ observations and normal downloads collected through the connected browser host. 
 standalone CLI imports those observations; it does not perform browser login or prove
 raw API transport compatibility. See [the current diagnosis and evidence boundary](connection-followup.md).
 
-One newly collected course/PDF/announcement/assessment sample has passed preliminary
+One newly collected course/PDF/announcement/assessment sample has passed installed-wheel
 normal CLI ingestion, local search, exact physical-page resolution, persisted-process
-retrieval and same-capture reuse checks. This bounded observation does not promote
+retrieval and same-capture reuse checks. Repeated sync preserves resource-backed event
+and Claim search projections; simulated capture expiry preserves cached data. This does
+not validate real SSO expiry. This bounded observation does not promote
 large-list pagination, all courses, all formats or the raw API translator to validated.
 The second fresh download is pending manual Mac unlock; integrated acceptance remains
 open. Private extraction evaluation and its remaining visual/context limits are recorded

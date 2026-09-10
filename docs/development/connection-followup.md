@@ -62,25 +62,63 @@ outputs are private. Only reviewed, de-identified outcomes may be added to this 
 
 ## Current validation observations
 
-The normal CLI imported a newly collected private browser capture into a new empty
+The installed wheel's normal CLI imported the newly collected private browser capture into a new empty
 runtime: one course, four selected content nodes, one nine-page PDF, one announcement
 and one assessment metadata record. Eight local processing jobs succeeded. Original
 bytes matched the browser download and the stored SHA-256; a local search resolved an
 answer to the original resource version and physical PDF page 5. Subsequent commands
-ran in new processes against the persisted store.
+ran in new processes against the persisted store. The final extractor produced six
+source-local candidates and five canonical events in this bounded live sample.
 
 Repeating the same capture created no additional resource version, parsed document or
 event. Its resource receipt was `NOT_NEEDED` / `within_verification_interval`, with no
 advance to the original verification timestamp. A cache-only invocation of the installed
-CLI target produced results with zero observed socket connection calls, no browser action
-and no attempt to open a deliberately nonexistent capture path.
+CLI target, using the same valid capture configuration, produced results with zero
+observed socket connection calls and no browser action. A separate negative configuration
+check confirmed that cache-only queries do not open a nonexistent capture path either.
+Forced verification of the old capture reports `capture_replay_assumed_not_reverified`;
+it does not claim a second download or advance the verification timestamp.
 
 A **simulated** expired capture returned `session_expired`; original bytes and the counts
 of versions, parses and events were unchanged. This does not validate real SSO expiry.
 Cached search remained usable afterward, with failed-coverage warnings retained.
 
-The current native browser tool reports that the Mac is locked and requires manual
+The last native browser-tool check reported that the Mac was locked and required manual
 unlock. Therefore a second fresh browser download and cross-capture hash verification
-remain pending. No alternate download channel was attempted. Implementation review and
-final integrated acceptance are still in progress; these observations are not an aggregate
-PASS or evidence of complete course coverage.
+remain pending. No alternate download channel was attempted. Source, host-entry and
+extraction and incremental index changes passed independent critical review. The installed
+entry exposed a derived-index bug: refreshing a resource dropped its event/Claim search
+rows while canonical data remained intact. The repair refreshes all projections for each
+affected course. On the same private runtime, a normal sync restored all four original
+logical search hits; repeat sync, old-capture verification and simulated expiration
+preserved them, with unchanged original bytes, versions, parses, candidates, events,
+Claims and jobs. Each command ran as a new installed-CLI process. These observations
+are not aggregate live acceptance or evidence of complete course coverage.
+
+## Real attachment extraction evaluation
+
+The frozen private sample contains two previously authorized attachments and one
+announcement. The original manual review covered all eleven rendered attachment pages
+and the complete selected announcement, not only pages hit by the extractor. Later
+evaluations reuse that frozen review and gold labels; they do not claim new visual review.
+
+| Measure | Original extractor | Reviewed contextual extractor |
+| --- | --- | --- |
+| Source-local event mentions found | 0 / 8 | 5 / 8 |
+| Missed mentions | 8 | 3, all image-only dates |
+| False positives in this sample | 0 | 0 |
+| Correct fields among matched mentions | Not applicable | 17 / 18 |
+| Gold fields not reached | 27 | 9 / 27 |
+| Correct page/observation and full component paths | Not applicable | 18 / 18 |
+| Literal contiguous field quotations | Not applicable | 17 / 18, including all seven temporal fields |
+
+The recovered selection deadline still has a generic heading instead of a sufficiently
+specific title. Constraints such as permitted materials, weights and deliverable rules
+remain retrievable source text and private evaluation context; the current event schema
+does not model them as scored event fields. Unknown timezones are not inferred.
+
+Embedded visual content now makes extraction explicitly PARTIAL even when native-text
+parsing completed. Original files and native text remain unchanged. No OCR, external LLM,
+external vision service or new data upload was introduced. Limited deterministic rules
+and an empty result do not prove that course arrangements are absent. These sample metrics
+do not establish recall or precision for all courses, document formats or writing styles.

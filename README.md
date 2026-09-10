@@ -7,9 +7,10 @@ event evidence, conflicts and synchronization state under a private runtime root
 
 > **Release status: NOT READY FOR PUBLIC RELEASE.** Phase 3 implementation passed
 > its synthetic acceptance gates. Phase 4 synthetic and runtime-safety validation
-> passed. A bounded browser-assisted live follow-up is in progress; the raw API
-> transport remains **NOT VALIDATED**. Phase 5 offline hardening passed; the remaining
-> live checks and final human release decision remain open. See the
+> passed. The first bounded browser-assisted download-to-search chain passed;
+> a second fresh download remains pending. The raw API transport is **NOT VALIDATED**.
+> Phase 5 offline hardening passed; the remaining live checks and final human release
+> decision remain open. See the
 > [connection follow-up](docs/development/connection-followup.md) and
 > [release checklist](docs/development/public-release-checklist.md).
 
