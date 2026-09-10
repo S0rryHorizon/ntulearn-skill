@@ -5,13 +5,13 @@ private NTULearn course mirror. It stores course metadata, downloaded resources,
 parsed PDF/DOCX text, deterministic FTS5 search data, announcements, assessments,
 event evidence, conflicts and synchronization state under a private runtime root.
 
-> **Release status: NOT READY FOR PUBLIC RELEASE.** Phase 3 implementation passed
-> its synthetic acceptance gates. Phase 4 synthetic and runtime-safety validation
-> passed. A bounded browser-assisted download-to-search chain and second-download
-> hash-verified reuse passed. The raw API transport is **NOT VALIDATED**.
-> Phase 5 offline hardening passed; the remaining live checks and final human release
-> decision remain open. See the
-> [connection follow-up](docs/development/connection-followup.md) and
+> **Status: limited experimental retrieval candidate.** The current build supports a
+> private local daily trial using the installed Skill and a bounded, host-assisted
+> fresh-collection path. It has not been published. Event extraction remains a preview:
+> answers must retain source links and uncertain fields, and important dates,
+> requirements and venues still need source or manual checks. Candidate repository
+> and artifact checks passed; human publication review remains pending. See
+> [daily-library validation](docs/development/daily-library-validation.md) and the
 > [release checklist](docs/development/public-release-checklist.md).
 
 ## What is implemented
@@ -39,25 +39,41 @@ LLM agent or provide a ChatGPT adapter.
 
 ## Current limits
 
-Synthetic and offline acceptance does not establish live NTULearn compatibility.
-The repository does not include automatic SSO, browser credential extraction,
-cookie copying or session renewal. The supported browser-assisted path uses normal
-UI reads and downloads, followed by the configured CLI; see the
-[browser usage guide](docs/usage-browser.md). Standalone CLI queries remain local.
-The separate raw API integration still needs a concrete authorized session, wire
-executor and validated fresh resource route; browser-assisted acceptance does not
-validate those components.
+The validated fresh path uses Codex on macOS with a connected Chrome browser, normal
+visible UI reads and downloads, and the installed browser Skill. Standalone CLI and
+daily-question Skill queries read the private local library; they do not log in or
+drive a browser. The repository does not include automatic SSO, browser credential
+extraction, cookie copying or session renewal. See the
+[browser usage guide](docs/usage-browser.md).
+
+The separate raw API integration remains unvalidated, but it is not a prerequisite
+for this bounded browser-host-assisted trial. The same is true of automatic SSO and
+unsupported formats. These deferred capabilities prevent broader compatibility
+claims rather than blocking evaluation of the documented local retrieval lane.
 
 Search is lexical rather than semantic. The built-in parsers cover PDF and DOCX;
-real PPTX, scanned-document fallback quality, complex DOCX tables, ordinary schedule
-coverage, large-list pagination and several remote freshness mechanisms remain
-unvalidated or deferred. See the [capability ledger](docs/development/capability-ledger.md)
-for the complete evidence boundary.
+PPTX text extraction remains unsupported, and ordinary page bodies, embedded
+attachments, external modules, scanned-document fallback quality, complex DOCX
+tables, large-list pagination and several remote freshness mechanisms remain partial,
+unvalidated or deferred. The current private trial stored 66 originals and parsed 65
+supported PDF/DOCX files. Fifty-eight chunks were flagged for possible visual review;
+two have bounded supplements and 56 remain unreviewed. These counts describe processing
+coverage, not course completeness.
+
+Two frozen event evaluations show why extraction remains a preview. One original
+source-local set recovered 8/8 mentions, 26/27 scored fields and 27/27 provenance
+checks. A separately selected set recovered 13/16 mentions with zero extra event mentions,
+but none of its 16 mentions was fully correct. Event type, time, venue and weak-identity
+limitations remain. See [daily-library validation](docs/development/daily-library-validation.md)
+for interpretation and the [capability ledger](docs/development/capability-ledger.md)
+for the broader evidence boundary.
 
 ## Install from a local checkout
 
-The package declares Python 3.11 or newer; the current validation matrix covers
-CPython 3.11 through 3.14. From this repository:
+The package declares Python 3.11 or newer. The latest integrated follow-up ran 556
+tests plus static checks and package builds on Python 3.12. The earlier Phase 5 run of
+463 tests on each of Python 3.11 through 3.14 is historical evidence and is not a
+current follow-up compatibility matrix. From this repository:
 
 ```console
 python3 -m venv .venv
@@ -72,9 +88,9 @@ be installed by path; the development workflow and exact validation commands are
 
 ## Query the private local store
 
-The default runtime root is `~/.ntulearn-skill/`. Set `NTULEARN_DATA_DIR`, pass
-`--root PRIVATE_ROOT`, or store an absolute `runtime_root` in the private host file
-`~/.ntulearn-skill/config.json`. That order is also the precedence order. A path inside
+The default runtime root is `~/.ntulearn-skill/`. Override it with `--root PRIVATE_ROOT`, then `NTULEARN_DATA_DIR`, then an absolute
+`runtime_root` in the private host file `~/.ntulearn-skill/config.json`, in that
+precedence order. A path inside
 a Git checkout is rejected unless it is explicitly below that checkout's ignored
 `.local/` directory.
 
@@ -90,16 +106,18 @@ ntulearn resource 3
 ```
 
 For a selected course whose local processing exceeds the default 64-job run bound,
-`ntulearn sync 1 --max-jobs 256` resumes the existing idempotent queue. Use
-`library-status --course 1` to inspect remaining and failed local work.
+the configured browser-Skill workflow can repeat synchronization with a larger
+`--max-jobs` value to resume the idempotent queue. A bare standalone CLI has no fresh
+source engine. Use `library-status --course 1` to inspect remaining and failed local
+work.
 
 The integers are local opaque keys discovered from earlier results. They are not
 NTULearn IDs or course codes. For example, an invented course may display the code
 `PH0000`, while its CLI argument is still its returned `local_key`.
 
-Local paths are omitted from results by default. Only `resource --include-local-path`
-opts into displaying a private local path. Query commands default to `cache-only` and
-never access a remote source under that policy.
+Local paths are omitted from results by default. `resource --include-local-path` and
+`visual prepare --include-local-path` are the explicit local-path opt-ins. Query
+commands default to `cache-only` and never access a remote source under that policy.
 
 CLI exit codes have stable meanings: `0` complete result, `1` operational failure,
 `2` partial/stale/unknown result, `3` complete empty result and `64` invalid usage.
@@ -108,12 +126,13 @@ Automation should inspect both the exit code and the versioned JSON envelope.
 ## Python API and source integration
 
 The public Python facade is `ntulearn_skill.core.api.CoreService`. Local-only use can
-start with `CoreService.from_runtime()`. Browser-assisted sync and fetch use
-`CoreService.from_runtime(root, browser_capture=private_manifest)`, which constructs
-the built-in provider and synchronization engine. Raw API or custom integrations can
-instead supply a `SyncEngine` composed from the typed `SessionProvider` and
-`SourceProvider` contracts. The separate NTULearn API adapter accepts a guarded
-`ReadOnlyTransport`, but does not create or recover an authenticated session.
+start with `CoreService.from_runtime()`. Normal fresh collection is orchestrated by
+the browser Skill on the supported host and then enters the same Core/CLI path. The
+private browser-capture manifest is an integration boundary rather than something a
+daily user needs to prepare. Raw API or custom integrations can instead supply a
+`SyncEngine` composed from the typed `SessionProvider` and `SourceProvider` contracts.
+The separate NTULearn API adapter accepts a guarded `ReadOnlyTransport`, but does not
+create or recover an authenticated session.
 
 See [usage](docs/usage.md) for verified method signatures and a minimal composition
 example. Source integration must remain within the read-only policy described in

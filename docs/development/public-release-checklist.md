@@ -1,101 +1,106 @@
 # Public release checklist
 
-Current assessment after Phase 5 offline hardening (2026-09-10):
-**NOT READY FOR PUBLIC RELEASE**.
+Current assessment (2026-09-10): **limited experimental retrieval candidate for a
+private local daily trial; publication pending**.
 
-## Gate snapshot
+This status applies to the documented browser-host-assisted collection and local
+retrieval lane. It is not an unqualified public-release approval. No remote, package,
+tag or announcement has been published, and the maintainer's final decision remains
+open.
 
-| Gate | Current evidence | State |
+## Current evidence snapshot
+
+| Area | Current evidence | State |
 | --- | --- | --- |
-| Phase 3 implementation | M1–M9 accepted under synthetic tests and independent reviews | **PASS** |
-| Phase 4 offline validation | 445 synthetic tests, lint/format, strict type checking, compile and wheel/sdist builds; independent runtime-safety review passed | **PASS** |
-| Phase 4 live validation | Authenticated UI reachable, but the known read-only API route was blocked by the browser client; no bypass or credential extraction attempted | **BLOCKED / NOT VALIDATED** |
-| Phase 5 independent hardening | Locked dependencies; 463 tests on each supported Python version; independent code/privacy review; final wheel/sdist and documentation checks | **PASS (offline)** |
-| Human public-release decision | No remote creation, push, package publication or release is authorized | **PENDING** |
+| Local Core, CLI and Skills | Daily Chinese/English questions use the same typed local Core interfaces and source locators | **VERIFIED FOR BOUNDED TRIAL** |
+| Fresh collection host | macOS Codex with connected Chrome; normal visible reads and downloads through the browser Skill | **VERIFIED FOR BOUNDED TRIAL** |
+| Latest integrated build | 556 tests on Python 3.12, static checks and package builds | **PASS** |
+| Original frozen event set | 8/8 mentions, 26/27 scored fields and 27/27 provenance checks | **BOUNDED PASS** |
+| Independent event set | 13/16 mentions, zero extra event mentions and 0/16 fully correct mentions | **PARTIAL** |
+| Library processing | 66 originals; 65 supported PDF/DOCX files parsed; one PPTX retained as unsupported | **PARTIAL COVERAGE** |
+| Visual review | 58 chunks flagged; two supplemented; 56 not reviewed | **PARTIAL** |
+| Candidate repository, history and distribution audit | Current local candidate checked; repeat after any later release changes | **PASS** |
+| Human publication decision | Explicit maintainer review and authorization required | **PENDING** |
 
-Offline PASS does not promote the aggregate live-validation gate. Publication remains
-blocked until the live gate has bounded evidence and a maintainer explicitly approves
-release after reviewing all Phase 5 artifacts.
+The event samples do not estimate recall across all courses. Event type, time, venue
+and weak-identity errors remain, so event output is a preview and important answers
+must be checked against exact sources or manual evidence. Full interpretation is in
+[daily-library validation](daily-library-validation.md).
 
-## Privacy and history
+## Verified bounded lane
 
-- [x] Audit every reachable Git revision and unique historical blob for prohibited
-  credentials, authenticated data, real course identifiers/metadata, real materials,
-  private logs and unexpected binary artifacts.
-- [x] Review all tracked fixtures and examples manually; confirm they are invented and
-  use only synthetic labels such as `PH0000`.
-- [x] Audit the final staged diff and verify ignore rules for `.local/`, the default
-  private runtime, credentials, captures, databases, indexes, caches, logs and builds.
-- [x] Scan the wheel and sdist contents independently from the working tree.
-- [x] Confirm generated metadata, error text and documentation contain no private paths,
-  usernames, host-specific secrets, signed URLs or source payload excerpts.
+- [x] Keep credentials, captures, original files, private databases, indexes and
+  evaluation labels outside Git.
+- [x] Use the installed browser Skill for bounded fresh collection on the validated
+  macOS Codex and connected Chrome host.
+- [x] Use standalone CLI and daily-question Skill commands for local retrieval; these
+  commands do not log in or control Chrome.
+- [x] Preserve immutable originals, source hashes, physical-page locators, extraction
+  history, conflicts and explicit uncertainty.
+- [x] Report cached observation freshness separately from a current remote read.
+- [x] Keep known-past dates, week-only statements, ambiguous dates and unresolved
+  identities visible rather than inventing exact instants.
+- [x] Run the latest integrated Python 3.12 suite, static checks and package builds.
 
-## Packaging and compatibility
+The raw API adapter, automatic SSO and unsupported formats are not prerequisites for
+this lane. They remain deferred and prevent broader product or compatibility claims.
 
-- [x] Create clean environments from the locked dependency set for every declared
-  Python version. Limit installation traffic to the configured public package registry
-  and record the resolved lock state.
-- [x] Run strict lint, format and type checks using the repository's canonical commands.
-- [x] Run the complete synthetic suite with sockets disabled and no credentials,
-  browser access or private source state.
-- [x] Run the dependency advisory audit using only its public vulnerability database;
-  do not contact NTULearn or any private source.
-- [x] Build both wheel and sdist; inspect their file lists and metadata.
-- [x] Install the wheel into a clean environment and verify the `ntulearn` console entry
-  point, `ntulearn --help`, local empty-store behavior and stable exit codes.
-- [x] Install from a local checkout and validate documented development commands.
-- [x] Confirm the MIT license is present in source and distributions and matches package
-  metadata. The current `LICENSE` is the standard MIT text for 2026 contributors.
+## Known coverage limits
 
-Record exact commands, interpreter versions, artifact contents and results in
-[packaging validation](packaging-validation.md). A prior milestone build does not
-satisfy this final audit.
+- [ ] Establish broader completeness for ordinary course-page bodies, folder
+  descriptions, embedded attachments and external interactive modules.
+- [ ] Add supported PPTX text extraction and validate representative legacy or office
+  formats.
+- [ ] Expand visual inspection beyond the two bounded supplements; flagged or
+  unreviewed chunks cannot be treated as fully understood.
+- [ ] Validate large-list pagination, remote delta/validator behavior, changed remote
+  bytes and real authentication expiry across representative courses.
+- [ ] Improve event type, time and venue extraction and resolve weak identities without
+  merging unrelated events.
+- [ ] Validate the separate raw API protocol and automatic session renewal if those
+  capabilities are later offered.
 
-## Public interface and documentation
+These items may remain deferred for a clearly labelled experimental candidate. They
+must remain explicit in user-facing documentation and release notes.
 
-- [x] Compare every documented CLI command and option with actual `ntulearn --help` and
-  subcommand help from the clean wheel install.
-- [x] Execute representative JSON commands against a temporary synthetic private root;
-  verify schema version `1.0` and exit codes `0`, `1`, `2`, `3` and `64`.
-- [x] Verify human and JSON output make freshness, scoped coverage, conflicts, provenance
-  and inconclusive absence visible.
-- [x] Verify safe errors do not reflect invalid arguments, exception text, credentials,
-  source payloads, authenticated URLs or private paths.
-- [x] Compare the Python API examples with actual type/constructor signatures.
-- [x] Confirm the source configuration guide requires injected authorized session and
-  transport providers and makes the absence of automatic SSO/browser credential
-  extraction explicit.
-- [x] Confirm the Codex dispatcher is described only as a thin Python surface, not an
-  installed plugin, agent or ChatGPT adapter.
-- [x] Check all relative Markdown links and packaged README content.
+## Historical evidence that needs current revalidation
 
-## Live validation gate
+Phase 5 previously ran 463 tests on each of Python 3.11 through 3.14, a dependency
+advisory audit, packaging checks and privacy review. That evidence applies to the
+earlier Phase 5 state. It has not been rerun as a current 3.11–3.14 matrix or current
+dependency audit after the daily-library follow-up.
 
-- [ ] Obtain a usable, explicitly authorized, read-only session/transport environment
-  without extracting browser credentials or bypassing client/security controls.
-- [ ] Run bounded current-live checks for course discovery, content traversal,
-  announcements, assessment/due data and resource retrieval.
-- [ ] Record detailed evidence only in the private runtime; publish only reviewed,
-  de-identified capability outcomes using `CONFIRMED`, `OBSERVED`, `HYPOTHESIS` and
-  `UNKNOWN` accurately.
-- [ ] Update the capability ledger without claiming global completeness from a bounded
-  sample.
-- [ ] Obtain an independent review of the live conclusions and failure handling.
+Before claiming current multi-version or dependency-audit coverage:
 
-If the environment remains blocked, retain **BLOCKED / NOT VALIDATED**. Do not convert
-the synthetic/runtime-safety PASS into a live PASS.
+- [ ] Re-run the full current suite on every claimed Python version.
+- [ ] Re-run the dependency advisory audit against the intended release lock state.
+- [ ] Record exact current commands, resolved dependencies and artifact hashes in
+  [packaging validation](packaging-validation.md).
 
-## Final human gate
+## Current candidate repository and artifact gates
 
-- [ ] Before publication, re-run history, staged-file and distribution privacy audits
-  after any remaining live-validation changes.
-- [x] Resolve or explicitly defer every independent hardening finding.
-- [ ] Before publication, recheck that the worktree is clean and the intended release
-  commit is the reviewed commit. The hardening postcommit check is recorded separately.
-- [ ] Have the maintainer review the final evidence, remaining limitations, security
-  reporting channel, package metadata and intended public destination.
-- [ ] Receive explicit human authorization before creating a public remote, pushing,
+The checks below apply to this local candidate. Repeat them after subsequent release
+changes; passing them does not authorize publication.
+
+- [x] Freeze the reviewed local candidate changes and ensure the working tree contains only
+  reviewed changes.
+- [x] Audit every reachable Git revision and unique historical blob for credentials,
+  authenticated data, real course metadata/materials, private logs and unexpected
+  binaries.
+- [x] Audit the final staged diff and verify ignore rules for `.local/`, private runtime
+  data, credentials, captures, databases, indexes, caches, logs and builds.
+- [x] Build wheel and sdist from the candidate state, inspect their complete contents and
+  metadata, and scan them independently from the working tree.
+- [x] Install the candidate wheel in a clean environment and verify the console entry
+  point, documented commands, empty-store behavior and stable exit codes.
+- [x] Check all public documentation links, examples and claims against current CLI
+  help and implementation behavior.
+- [x] Confirm generated metadata and errors contain no private paths, usernames,
+  signed URLs or source excerpts.
+- [ ] Have the maintainer review the evidence, remaining limitations, security channel,
+  package metadata and intended public destination.
+- [ ] Receive explicit authorization before creating a public remote, pushing,
   publishing a package, tagging a release or announcing availability.
 
-Until every required gate above is satisfied or consciously waived by the maintainer,
-the release decision remains **NOT READY FOR PUBLIC RELEASE**.
+Until the human decision and any required publication-state rechecks are complete, describe the project as
+a **limited experimental retrieval candidate** and say that publication is pending.

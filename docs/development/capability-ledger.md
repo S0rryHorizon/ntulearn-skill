@@ -11,7 +11,7 @@ otherwise. Private evidence belongs only in `.local/` or the private runtime roo
 | Original-file validators / revisions | UNKNOWN | Metadata signals plus periodic SHA-256 verification | Naturally revised original | Conditional downloads disabled |
 | Authentication renewal | UNKNOWN | Typed expiry; preserve local data; request interactive login | Expired authorized session | Renewal disabled |
 | Ordinary schedule coverage | UNKNOWN | Separate announcements, assessments, due items and documents | Bounded accessible schedule comparison | Never use calendar alone |
-| Real PPTX | UNKNOWN | Store original; unsupported parser state | Authorized original encountered | Compatibility deferred |
+| Real PPTX | OBSERVED original storage; parsing unsupported | Preserve original and explicit unsupported state | Supported parser implementation and bounded validation | PPTX text retrieval deferred |
 | Scanned PDF / visual fallback quality | UNKNOWN | Preserve originals; partial diagnostics | Authorized representative scan | No complete visual-understanding claim |
 | Complex DOCX tables | UNKNOWN | Preserve structure where supported; report limitations | Representative authorized original | Compatibility deferred |
 | Legacy / other office formats | UNKNOWN | Store original; explicit unsupported state | Specific format requirement | Compatibility deferred |
@@ -141,3 +141,17 @@ immutable version, derived counts and source locators. The lock blocker is resol
 Aggregate coverage and raw API validation remain open. Private extraction evaluation
 and its remaining visual/context limits are recorded
 in the follow-up rather than inferred from synthetic parser success.
+
+## Daily-library follow-up
+
+The accepted repeatable connection chain is complete. Subsequent bounded collection
+covered six accessible course inventories, including four prioritized formal courses.
+Normal browser downloads and the installed CLI stored 66 originals, with 65 supported
+PDF/DOCX parse results and one unsupported PPTX. Coverage remains layered and partial:
+web lesson bodies, embedded content, external modules and selective visual inspection
+are not inferred complete from tree traversal or parser success.
+
+See [daily-library validation](daily-library-validation.md) for current acceptance.
+The earlier raw API blockers above are historical evidence for that separate lane,
+not a prerequisite for the documented browser-host-assisted local trial. No bypass,
+automatic SSO renewal or additional external service is part of that trial.

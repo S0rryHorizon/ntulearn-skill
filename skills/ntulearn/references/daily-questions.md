@@ -27,6 +27,8 @@ remain in private host state outside the repository and must be revalidated with
 `library-status` reports content-node counts and file-backed download, parse, and index
 progress, plus local job totals and pending/running/failed counts for that course. It does
 not establish that non-file content-page bodies or folder descriptions were captured.
+`indexed_chunks` counts searchable chunk documents, including supplemental text rows;
+it is not a count of distinct PDF pages.
 Surface its coverage and `content_page_body_coverage_unavailable` warning. If local work
 remains after a user-requested fresh sync, the browser workflow may resume the same
 idempotent queue with a bounded `sync COURSE_KEY --max-jobs N`; never raise the bound in
@@ -63,6 +65,14 @@ ntulearn --json search "presentation" --course COURSE_KEY --freshness cache-only
 This decomposition lets a Chinese question retrieve English source evidence. Adjust the
 variants to the user's wording; do not execute every example term when it is irrelevant.
 
+When answering an assessment requirement or deadline question, cross-check its title/topic
+against the relevant attachment and announcement text using separate terms such as `due`,
+`deadline`, `submit`, and `week`. Inspect nearby schedule or assessment passages when the
+hits point to them. A typed assessment date is one source, not proof that other sources
+agree. Report differing dates, times, locations or requirements even when the event
+projection has no conflict entry; unresolved candidates and unextracted text can still
+contain a disagreement. Keep this check bounded to the selected course and relevant material.
+
 ## Present an upcoming window conservatively
 
 Do not describe every item returned by `upcoming` as confirmed inside the requested
@@ -71,7 +81,9 @@ unbounded because it may overlap. Inspect `start_time`, `end_time`, `due_time`, 
 conflicting claims, `precision`, `date`, `local_time`, `week`, and `source_text` before
 presenting it.
 
-- Put an exact instant inside the window under confirmed upcoming work.
+- An exact instant inside the window establishes temporal placement, not event accuracy.
+  Inspect its supporting source, classification, review status and alternatives before
+  calling it confirmed. Otherwise label it as a source-stated arrangement or preview.
 - For `DATE_ONLY` inside the requested calendar-date range, say the date is known and
   the specific time is unconfirmed. Do not invent a timezone.
 - If an exact instant or source date is clearly before the requested window, omit it
@@ -83,7 +95,7 @@ presenting it.
   the convenient date.
 
 Synthetic example for a request covering `[D, D+7)`: an exact `D+2` deadline is
-confirmed; a source date `D-1` is past; `Week 4` and `14:00` without a date are both
+inside the window but still needs source verification; a source date `D-1` is past; `Week 4` and `14:00` without a date are both
 “时间未定位”. The latter two remain visible because the Core result is conservative,
 not because their membership in the seven-day window was established.
 
@@ -114,6 +126,15 @@ Present PDF physical page indices as one-based page numbers. Keep source keys, v
 keys, and locators in the answer so a later query can reproduce the evidence. Separate
 source-backed statements from interpretations and mention unresolved conflicts.
 
+When `source` returns `visual_evidence`, inspect `is_current`, `review_status`,
+confidence and uncertainty alongside the original version/hash and physical page.
+`is_current` means the latest visual revision for the selected parse/page and method;
+it does not establish that the resource version or remote content is current. Check
+version and freshness separately, especially for a historical locator. Use the latest
+relevant evidence by default; historical evidence explains revisions. Preserve PARTIAL/NEEDS_REVIEW qualifications in the answer and
+do not silently promote a visual transcription or precise date to a confirmed event.
+Native text and supplemental evidence remain separate; inspect both when they differ.
+
 For `recent-materials`, “no items” means no changed resource observations were recorded
 in the local window. It does not prove that NTULearn had no remote changes between
 observations. For library progress, show both numerator and denominator; avoid saying
@@ -121,6 +142,8 @@ observations. For library progress, show both numerator and denominator; avoid s
 
 ## Cache-only boundary
 
-For a cache-only request, pass `--freshness cache-only` on every query. Do not pass
+For a cache-only request, pass `--freshness cache-only` on query commands that expose
+that option. `source` and `resource` are intrinsically local reads and do not accept
+the option; use their documented arguments. Do not pass
 `--browser-capture`, `refresh-if-stale`, `require-current`, or `--max-age-seconds`; do
 not call `sync` or `fetch`. A cache-only answer must have `refresh_attempted=false`.
