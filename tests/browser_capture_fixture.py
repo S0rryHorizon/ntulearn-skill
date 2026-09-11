@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from ntulearn_skill.client import (
+    prepare_browser_capture_directory,
+    write_browser_capture_manifest,
+)
 
 
 def _pdf(label: bytes = b"Synthetic browser capture") -> bytes:
@@ -124,12 +128,9 @@ def synthetic_manifest(captured_at: datetime) -> dict[str, Any]:
 
 
 def write_synthetic_browser_bundle(root: Path, captured_at: datetime) -> Path:
+    root = prepare_browser_capture_directory(root)
     files = root / "files"
-    files.mkdir(parents=True)
+    files.mkdir(mode=0o700)
     (files / "synthetic-course-overview.pdf").write_bytes(_pdf())
     manifest = root / "manifest.json"
-    manifest.write_text(
-        json.dumps(synthetic_manifest(captured_at), ensure_ascii=False),
-        encoding="utf-8",
-    )
-    return manifest
+    return write_browser_capture_manifest(manifest, synthetic_manifest(captured_at))

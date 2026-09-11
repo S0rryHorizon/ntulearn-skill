@@ -34,6 +34,7 @@ from ntulearn_skill.events import (
     CandidateFieldName,
     DeterministicEventExtractor,
     EventRepository,
+    EventType,
 )
 from ntulearn_skill.parsers import (
     DocxParser,
@@ -1031,3 +1032,48 @@ def test_extraction_is_idempotent_per_parse_but_new_parse_input_is_reprocessed(
         (first.extraction_record_key, first_parse.document.key),
         (second.extraction_record_key, second_parse.document.key),
     ]
+
+
+def test_scientific_test_wording_is_not_classified_as_an_assessment(tmp_path: Path) -> None:
+    harness = _harness(tmp_path)
+    for ordinal, body in enumerate(
+        (
+            "A scientific test examines the sample on Monday, 6th May 2030.",
+            "Test the circuit on Monday, 6th May 2030.",
+        )
+    ):
+        observed = harness.events.observe_announcement(
+            AnnouncementSourceRecord(
+                AnnouncementId("synthetic", f"scientific-test-{ordinal}"),
+                harness.course_id,
+                "Synthetic experiment note",
+                body,
+                Availability.ACTIVE,
+            ),
+            sync_run_key=_sync_run(harness.database),
+        )
+        assert harness.extractor.extract_observation(observed.observation.key).candidates == ()
+
+
+def test_assessment_test_is_retained_when_later_text_mentions_statistical_tests(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    for ordinal, body in enumerate(
+        (
+            "The test is on Monday, 6th May 2030.",
+            "The test covers statistical tests and is on Monday, 6th May 2030.",
+        )
+    ):
+        observed = harness.events.observe_announcement(
+            AnnouncementSourceRecord(
+                AnnouncementId("synthetic", f"assessment-test-{ordinal}"),
+                harness.course_id,
+                "Synthetic assessment note",
+                body,
+                Availability.ACTIVE,
+            ),
+            sync_run_key=_sync_run(harness.database),
+        )
+        candidate = harness.extractor.extract_observation(observed.observation.key).candidates[0]
+        assert candidate.field(CandidateFieldName.EVENT_TYPE).value == EventType.TEST.value  # type: ignore[union-attr]

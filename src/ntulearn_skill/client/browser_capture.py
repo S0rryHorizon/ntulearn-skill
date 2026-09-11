@@ -64,6 +64,10 @@ MAX_RESOURCE_BYTES = 100 * 1024 * 1024
 MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 MAX_CAPTURE_TTL = timedelta(hours=24)
 MAX_FUTURE_SKEW = timedelta(minutes=5)
+BROWSER_CAPTURE_ERROR_MESSAGE = (
+    "the browser capture did not match a supported shape; check that its private directory is "
+    "mode 0700 and its regular manifest file is mode 0600"
+)
 
 _CAPTURE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _REMOTE_ID = re.compile(r"[A-Za-z0-9._-]{1,512}\Z")
@@ -80,6 +84,14 @@ class _ResourceFile:
     device: int
     inode: int
     byte_size: int
+
+
+class BrowserCaptureManifestError(SourceProtocolError):
+    """Privacy-safe capture failure with a fixed remediation hint."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.args = (BROWSER_CAPTURE_ERROR_MESSAGE,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,22 +127,141 @@ class BrowserCaptureBundle:
 
         try:
             lexical = Path(os.path.abspath(os.fspath(Path(manifest_path).expanduser())))
-            if lexical.is_symlink():
-                raise ValueError
-            path = validate_private_path(lexical)
-            metadata = path.lstat()
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_MANIFEST_BYTES:
-                raise ValueError
-            payload = json.loads(
-                path.read_text(encoding="utf-8"),
-                object_pairs_hook=_unique_object,
-                parse_constant=_invalid_json_constant,
+            validate_private_path(lexical)
+            payload = _read_manifest(lexical)
+            return _parse_bundle(
+                json.loads(
+                    payload.decode("utf-8"),
+                    object_pairs_hook=_unique_object,
+                    parse_constant=_invalid_json_constant,
+                ),
+                lexical.parent,
             )
-            return _parse_bundle(payload, path.parent)
-        except SourceProtocolError:
+        except BrowserCaptureManifestError:
             raise
         except Exception:
-            raise SourceProtocolError() from None
+            raise BrowserCaptureManifestError() from None
+
+
+def prepare_browser_capture_directory(bundle_root: str | Path) -> Path:
+    """Create or validate an owner-only directory for one private capture."""
+
+    try:
+        lexical = Path(os.path.abspath(os.fspath(Path(bundle_root).expanduser())))
+        validate_private_path(lexical)
+        lexical.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = _open_capture_directory(lexical)
+        try:
+            if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o700:
+                raise ValueError
+        finally:
+            os.close(descriptor)
+        return lexical
+    except BrowserCaptureManifestError:
+        raise
+    except Exception:
+        raise BrowserCaptureManifestError() from None
+
+
+def write_browser_capture_manifest(manifest_path: str | Path, payload: Mapping[str, Any]) -> Path:
+    """Create a new private manifest without a group/other-readable write window."""
+
+    lexical: Path | None = None
+    directory_descriptor: int | None = None
+    file_descriptor: int | None = None
+    created = False
+    try:
+        lexical = Path(os.path.abspath(os.fspath(Path(manifest_path).expanduser())))
+        if not isinstance(payload, Mapping):
+            raise ValueError
+        encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        if len(encoded) > MAX_MANIFEST_BYTES:
+            raise ValueError
+        prepare_browser_capture_directory(lexical.parent)
+        directory_descriptor = _open_capture_directory(lexical.parent)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        file_descriptor = os.open(lexical.name, flags, 0o600, dir_fd=directory_descriptor)
+        created = True
+        metadata = os.fstat(file_descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise ValueError
+        remaining = memoryview(encoded)
+        while remaining:
+            written = os.write(file_descriptor, remaining)
+            if written <= 0:
+                raise OSError
+            remaining = remaining[written:]
+        os.close(file_descriptor)
+        file_descriptor = None
+        return lexical
+    except BrowserCaptureManifestError:
+        raise
+    except Exception:
+        if created and directory_descriptor is not None and lexical is not None:
+            try:
+                os.unlink(lexical.name, dir_fd=directory_descriptor)
+            except OSError:
+                pass
+        raise BrowserCaptureManifestError() from None
+    finally:
+        if file_descriptor is not None:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+        if directory_descriptor is not None:
+            try:
+                os.close(directory_descriptor)
+            except OSError:
+                pass
+
+
+def _open_capture_directory(path: Path) -> int:
+    flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise ValueError
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _read_manifest(path: Path) -> bytes:
+    file_flags = (
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    )
+    directory_descriptor: int | None = None
+    file_descriptor: int | None = None
+    try:
+        directory_descriptor = _open_capture_directory(path.parent)
+        file_descriptor = os.open(path.name, file_flags, dir_fd=directory_descriptor)
+        metadata = os.fstat(file_descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or metadata.st_size > MAX_MANIFEST_BYTES
+        ):
+            raise ValueError
+        with os.fdopen(file_descriptor, "rb", closefd=True) as stream:
+            file_descriptor = None
+            payload = stream.read(MAX_MANIFEST_BYTES + 1)
+        if len(payload) > MAX_MANIFEST_BYTES:
+            raise ValueError
+        return payload
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
 
 
 class BrowserCaptureSessionProvider:
@@ -975,7 +1106,9 @@ def _page(items: Sequence[_T], request: PageRequest, coverage: Coverage) -> Page
 
 
 __all__ = [
+    "BROWSER_CAPTURE_ERROR_MESSAGE",
     "BrowserCaptureBundle",
+    "BrowserCaptureManifestError",
     "BrowserCaptureProvider",
     "BrowserCaptureSessionProvider",
     "MAX_BUNDLE_BYTES",
@@ -984,4 +1117,6 @@ __all__ = [
     "MAX_RESOURCE_BYTES",
     "PROVIDER_NAME",
     "SCHEMA_VERSION",
+    "prepare_browser_capture_directory",
+    "write_browser_capture_manifest",
 ]

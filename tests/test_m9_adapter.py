@@ -109,6 +109,7 @@ def test_search_calls_one_typed_core_method_and_preserves_the_complete_envelope(
             "course_key": 7,
             "limit": 5,
             "neighbor_count": 2,
+            "cursor": "synthetic-cursor",
             "freshness": {"mode": "require_current"},
         },
     )
@@ -120,6 +121,7 @@ def test_search_calls_one_typed_core_method_and_preserves_the_complete_envelope(
     assert isinstance(arguments[1], SearchQuery)
     assert arguments[1].text == "quiz"
     assert arguments[1].limit == 5 and arguments[1].neighbor_count == 2
+    assert arguments[1].cursor == "synthetic-cursor"
     assert getattr(arguments[2], "mode").value == "REQUIRE_CURRENT"
     assert payload["schema_version"] == "1.0"
     assert payload["operation"] == "search_course"

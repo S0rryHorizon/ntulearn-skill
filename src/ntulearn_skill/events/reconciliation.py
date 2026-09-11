@@ -1211,6 +1211,7 @@ class EventReconciler:
         )
 
     def _recompute_event(self, connection: sqlite3.Connection, event_key: int, now: str) -> None:
+        self._expire_outdated_manual_resolutions(connection, event_key)
         active_claim = active_claim_sql("claim")
         connection.execute(
             f"""UPDATE claim SET
@@ -1402,6 +1403,118 @@ class EventReconciler:
                 now,
                 event_key,
             ),
+        )
+
+    @staticmethod
+    def _expire_outdated_manual_resolutions(connection: sqlite3.Connection, event_key: int) -> None:
+        """Retire decisions displaced by newer or no-longer-current source evidence."""
+
+        effective = effective_extraction_sql("extraction")
+        connection.execute(
+            f"""UPDATE manual_identity_resolution SET active = 0
+            WHERE event_key = ? AND active = 1 AND NOT EXISTS (
+                SELECT 1 FROM event_source source
+                JOIN event_candidate candidate
+                  ON candidate.candidate_key = source.candidate_key
+                JOIN extraction_record extraction
+                  ON extraction.extraction_record_key = candidate.extraction_record_key
+                WHERE source.event_source_key =
+                      manual_identity_resolution.event_source_key
+                  AND {effective}
+            )""",
+            (event_key,),
+        )
+        resolutions = connection.execute(
+            """SELECT manual_resolution_key, field_name, selected_claim_key,
+                      local_claim_key, decided_at
+            FROM manual_field_resolution
+            WHERE event_key = ? AND active = 1
+            ORDER BY manual_resolution_key""",
+            (event_key,),
+        ).fetchall()
+        for resolution in resolutions:
+            selected_key = int(resolution["selected_claim_key"] or resolution["local_claim_key"])
+            selected = connection.execute(
+                """SELECT claim_key, origin, field_name, value_json,
+                          temporal_precision
+                FROM claim WHERE claim_key = ? AND event_key = ?""",
+                (selected_key, event_key),
+            ).fetchone()
+            if selected is None:
+                raise ValueError("manual resolution does not belong to this event field")
+
+            selected_is_current = True
+            if str(selected["origin"]) == ClaimOrigin.SOURCE.value:
+                selected_is_current = (
+                    connection.execute(
+                        f"""SELECT 1 FROM claim
+                        JOIN event_source source
+                          ON source.event_source_key = claim.event_source_key
+                        JOIN event_candidate candidate
+                          ON candidate.candidate_key = source.candidate_key
+                        JOIN extraction_record extraction
+                          ON extraction.extraction_record_key = candidate.extraction_record_key
+                        WHERE claim.claim_key = ? AND {effective}""",
+                        (selected_key,),
+                    ).fetchone()
+                    is not None
+                )
+
+            field_name = CandidateFieldName(str(resolution["field_name"]))
+            selected_value = cast(JsonValue, json.loads(str(selected["value_json"])))
+            newer = connection.execute(
+                f"""SELECT claim.value_json, claim.temporal_precision
+                FROM claim
+                JOIN event_source source
+                  ON source.event_source_key = claim.event_source_key
+                JOIN event_candidate candidate
+                  ON candidate.candidate_key = source.candidate_key
+                JOIN extraction_record extraction
+                  ON extraction.extraction_record_key = candidate.extraction_record_key
+                WHERE claim.event_key = ? AND claim.field_name = ?
+                  AND claim.origin = 'SOURCE' AND claim.claim_key <> ?
+                  AND claim.created_at > ? AND {effective}
+                ORDER BY claim.claim_key""",
+                (
+                    event_key,
+                    field_name.value,
+                    selected_key,
+                    str(resolution["decided_at"]),
+                ),
+            ).fetchall()
+            displaced = any(
+                not EventReconciler._manual_value_compatible(
+                    field_name,
+                    selected_value,
+                    None
+                    if selected["temporal_precision"] is None
+                    else str(selected["temporal_precision"]),
+                    cast(JsonValue, json.loads(str(row["value_json"]))),
+                    None if row["temporal_precision"] is None else str(row["temporal_precision"]),
+                )
+                for row in newer
+            )
+            if not selected_is_current or displaced:
+                connection.execute(
+                    """UPDATE manual_field_resolution SET active = 0
+                    WHERE manual_resolution_key = ? AND active = 1""",
+                    (int(resolution["manual_resolution_key"]),),
+                )
+
+    @staticmethod
+    def _manual_value_compatible(
+        field_name: CandidateFieldName,
+        selected_value: JsonValue,
+        selected_precision: str | None,
+        candidate_value: JsonValue,
+        candidate_precision: str | None,
+    ) -> bool:
+        if field_name in _TEMPORAL_FIELDS:
+            return selected_precision == candidate_precision and temporal_agrees(
+                selected_value, candidate_value
+            )
+        return semantic_value(field_name, selected_value) == semantic_value(
+            field_name, candidate_value
         )
 
     @staticmethod

@@ -344,6 +344,72 @@ def test_allow_stale_reports_configured_age_and_newer_incomplete_attempt() -> No
     assert not decision.satisfied and decision.should_refresh
 
 
+def test_success_observation_and_complete_snapshot_are_reported_separately() -> None:
+    scope = ScopeKey("synthetic", None, "courses")
+    state = SyncState(
+        scope=scope,
+        latest_attempt_run_key=2,
+        last_attempt_at=_instant(2),
+        last_attempt_outcome=SyncAttemptOutcome.SUCCEEDED,
+        latest_coverage=Coverage.PARTIAL,
+        warning_codes=(),
+        latest_success_run_key=2,
+        last_success_at=_instant(2),
+        latest_complete_run_key=1,
+        last_complete_at=_instant(1),
+        configured_max_age=None,
+    )
+
+    decision = evaluate_freshness(state, FreshnessRequirement.cache_only(), now=_instant(3))
+
+    assert decision.as_of == decision.complete_snapshot_at == _instant(1)
+    assert decision.age == decision.complete_snapshot_age == timedelta(hours=2)
+    assert decision.successful_observation_at == _instant(2)
+    assert decision.successful_observation_age == timedelta(hours=1)
+    assert not decision.ttl_configured
+    assert decision.status is FreshnessStatus.STALE
+    assert FreshnessWarning.LATEST_ATTEMPT_INCOMPLETE in decision.warning_codes
+    assert FreshnessWarning.NO_MAX_AGE_GUARANTEE in decision.warning_codes
+
+
+def test_complete_observation_without_ttl_is_current_but_has_no_age_guarantee() -> None:
+    scope = ScopeKey("synthetic", None, "courses")
+    state = _snapshot(scope, attempted_at=_instant(1), complete_at=_instant(1))
+
+    decision = evaluate_freshness(state, FreshnessRequirement.cache_only(), now=_instant(3))
+
+    assert decision.status is FreshnessStatus.CURRENT
+    assert not decision.ttl_configured
+    assert FreshnessWarning.NO_MAX_AGE_GUARANTEE in decision.warning_codes
+
+
+def test_successful_partial_observation_does_not_create_a_complete_snapshot() -> None:
+    scope = ScopeKey("synthetic", None, "courses")
+    state = SyncState(
+        scope=scope,
+        latest_attempt_run_key=1,
+        last_attempt_at=_instant(2),
+        last_attempt_outcome=SyncAttemptOutcome.SUCCEEDED,
+        latest_coverage=Coverage.PARTIAL,
+        warning_codes=(),
+        latest_success_run_key=1,
+        last_success_at=_instant(2),
+        latest_complete_run_key=None,
+        last_complete_at=None,
+        configured_max_age=None,
+    )
+
+    decision = evaluate_freshness(state, FreshnessRequirement.cache_only(), now=_instant(3))
+
+    assert decision.status is FreshnessStatus.UNKNOWN
+    assert decision.successful_observation_at == _instant(2)
+    assert decision.successful_observation_age == timedelta(hours=1)
+    assert decision.complete_snapshot_at is None
+    assert decision.complete_snapshot_age is None
+    assert decision.as_of is None and decision.age is None
+    assert decision.latest_coverage is Coverage.PARTIAL
+
+
 def test_same_timestamp_higher_failed_run_stays_visible_for_all_policies(
     state_store: tuple[Database, SyncStateRepository, CourseId],
 ) -> None:

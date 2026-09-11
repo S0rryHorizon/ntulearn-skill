@@ -1,9 +1,13 @@
 """Authenticated, operation-guarded source-client boundary."""
 
 from ntulearn_skill.client.browser_capture import (
+    BROWSER_CAPTURE_ERROR_MESSAGE,
     BrowserCaptureBundle,
+    BrowserCaptureManifestError,
     BrowserCaptureProvider,
     BrowserCaptureSessionProvider,
+    prepare_browser_capture_directory,
+    write_browser_capture_manifest,
 )
 from ntulearn_skill.client.contracts import (
     AnnouncementSourceRecord,
@@ -52,7 +56,9 @@ __all__ = [
     "AuthenticationRequired",
     "AssessmentSourceRecord",
     "AuthorizedReadSession",
+    "BROWSER_CAPTURE_ERROR_MESSAGE",
     "BrowserCaptureBundle",
+    "BrowserCaptureManifestError",
     "BrowserCaptureProvider",
     "BrowserCaptureSessionProvider",
     "CapabilityState",
@@ -88,4 +94,6 @@ __all__ = [
     "WireResponse",
     "safe_source_error_category",
     "source_observed_at",
+    "prepare_browser_capture_directory",
+    "write_browser_capture_manifest",
 ]

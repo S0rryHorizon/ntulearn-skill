@@ -45,6 +45,9 @@ QueryResult[T]
   provenance: list[ProvenanceView]
   coverage: list[CoverageView]
   freshness: as_of + staleness by scope
+  source_completeness: aggregate relevant evidence-layer coverage, excluding pagination
+  freshness_satisfied: freshness policy result only
+  truncated + next_cursor: local page continuation only
   conflicts: list[ConflictView]
   warnings: list[SafeWarning]
   completeness: COMPLETE | PARTIAL | STALE | UNKNOWN | FAILED
@@ -52,6 +55,27 @@ QueryResult[T]
 
 An empty `items` list is conclusive only within explicitly complete and sufficiently fresh scopes.
 Otherwise presentation must say “not found in the available local coverage,” not “does not exist.”
+
+The legacy `completeness` field remains an aggregate compatibility signal. The compatible
+`source_completeness` name covers every relevant `coverage[]` entry for the operation,
+including source scopes and required local derivation layers such as parse, event derivation or
+temporal projection coverage. It does not include page truncation. New callers must inspect
+that coverage aggregate, freshness and pagination separately. Continuation
+cursors bind the operation, filters, limit, a hashed private-runtime identity and a serialized
+SQLite snapshot digest. The digest includes committed WAL content while ignoring unchanged
+WAL checkpoint and removal lifecycle. Cursors provide a stable continuation while that serialized
+snapshot remains unchanged; detected inserts, updates, deletes or reordered rows invalidate the
+cursor and require a restart from page one. This is an optimistic before-and-after guard around each
+assembled page, not a transaction spanning calls; a rejected continuation must restart.
+Every paginated ordering ends in a unique local key, so equal user-visible sort values do not
+create duplicates or omissions while the validated snapshot remains unchanged.
+It is not an adversarial replacement detector and cannot promise detection of a transient
+ABA sequence that restores the same serialized state. Private-runtime permissions remain
+the trust boundary.
+The current guard serializes and hashes the metadata database before and after each page,
+so its time and temporary-memory cost scale linearly with database size. A future persistent
+generation counter would require a reviewed schema migration and is outside this compatibility
+change.
 
 ## Core service API
 

@@ -87,6 +87,7 @@ class SearchQuery:
     filters: SearchFilters = field(default_factory=SearchFilters)
     limit: int = 20
     neighbor_count: int = 1
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.filters, SearchFilters):
@@ -99,6 +100,13 @@ class SearchQuery:
             raise ValueError("search limit must be between 1 and 100")
         if not 0 <= self.neighbor_count <= 5:
             raise ValueError("neighbor count must be between 0 and 5")
+        if self.cursor is not None and (
+            not isinstance(self.cursor, str)
+            or not self.cursor
+            or not self.cursor.isascii()
+            or len(self.cursor) > 2_048
+        ):
+            raise ValueError("search cursor must be bounded ASCII text")
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +152,7 @@ class SearchResult:
     as_of: datetime | None
     warnings: tuple[str, ...]
     message: str
+    truncated: bool = False
 
     @property
     def conclusive_empty(self) -> bool:

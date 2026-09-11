@@ -12,8 +12,29 @@ tree. The complete synthetic construction example is
 
 ## Top-level object
 
-The manifest is UTF-8 JSON, at most 2 MiB, with duplicate keys rejected. It accepts exactly these
-keys:
+The manifest is UTF-8 JSON, at most 2 MiB, with duplicate keys rejected.
+
+The capture directory must be a real owner-only directory (mode `0700`) and the manifest must be a
+regular owner-only file (mode `0600`). Symbolic links and group/other permission bits are rejected.
+Host integrations use `prepare_browser_capture_directory` before saving capture content and
+`write_browser_capture_manifest` for the final JSON. The writer opens a new file as `0600` before
+writing; creating a default `write_text` file as `0644` and changing its mode afterward is not a
+safe substitute. The importer opens the directory and manifest without following final symlinks,
+then validates and reads the manifest through the same bounded file descriptor. Permission failures
+produce a fixed remediation hint without echoing the capture path or manifest content.
+
+```python
+from ntulearn_skill.client import (
+    prepare_browser_capture_directory,
+    write_browser_capture_manifest,
+)
+
+bundle_root = prepare_browser_capture_directory(PRIVATE_BUNDLE_ROOT)
+# Save ordinary browser downloads below bundle_root, then write the final bounded payload.
+manifest_path = write_browser_capture_manifest(bundle_root / "manifest.json", payload)
+```
+
+The top-level object accepts exactly these keys:
 
 | Key | Type | Meaning |
 | --- | --- | --- |

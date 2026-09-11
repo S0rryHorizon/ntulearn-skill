@@ -32,13 +32,18 @@ are zero-based internally and should be presented as one-based page numbers to u
    tokens, browser-password exports or a hand-written connection object.
 2. Choose only the authorized course/resource scope. Read normal course cards and content
    pages, preserving the observed course/content identifiers and source page path. Use
-   ordinary visible download controls to save original bytes into a new owner-only
-   private capture bundle. Do not navigate directly to signed asset URLs.
+   `bundle_root = prepare_browser_capture_directory(PRIVATE_BUNDLE_ROOT)` from
+   `ntulearn_skill.client` before saving anything, then use ordinary visible download
+   controls to save original bytes into that new owner-only private capture bundle. Do
+   not navigate directly to signed asset URLs.
 3. Collect the original visible title/body/labels and explicitly observed identifiers in
    the source adapter's capture format. Preserve raw date wording and uncertainty; do not
    infer an unavailable identifier, timezone, due date, exhaustive coverage or event merge.
    Keep identity derivation and record translation in the source adapter. The agent, not
-   the user, prepares this private bundle using the documented contract.
+   the user, prepares this private bundle using the documented contract. Finish it with
+   `write_browser_capture_manifest(bundle_root / "manifest.json", payload)` from
+   `ntulearn_skill.client`. Do not create the manifest with `write_text` and tighten its
+   mode afterward; the helper creates it as `0600` before any private JSON is written.
 4. Invoke the normal CLI with `--browser-capture PRIVATE_MANIFEST` and the requested sync
    mode. Preserve the adapter's captured-time, stale and partial warnings. This is a
    browser-host-assisted observation import, not a direct HTTP connection or an assertion
@@ -54,3 +59,6 @@ Real captures, manifests, downloads, labels, database state and validation repor
 outside Git under `~/.ntulearn-skill/` (or the project's ignored `.local/`). Do not store
 signed URLs, browser credentials, complete page dumps or unrelated personal information
 in the bundle. Public fixtures must be invented independently of real course material.
+`UNKNOWN`: the exact native download path and permission behavior has not been validated on every
+supported browser host. Recheck the generated bundle through the normal CLI import rather than
+assuming host filesystem behavior.

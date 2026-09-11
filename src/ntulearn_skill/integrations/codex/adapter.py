@@ -221,22 +221,37 @@ class CodexToolDispatcher:
         self, tool_name: str, raw_arguments: Mapping[str, object]
     ) -> ResultEnvelope[object]:
         if tool_name == "list_courses":
-            arguments = _arguments(raw_arguments, allowed=frozenset({"freshness"}))
+            arguments = _arguments(
+                raw_arguments, allowed=frozenset({"freshness", "limit", "cursor"})
+            )
             return cast(
                 ResultEnvelope[object],
-                self._service.list_courses(CourseFilter(), _freshness(arguments.get("freshness"))),
+                self._service.list_courses(
+                    CourseFilter(
+                        limit=_integer(arguments.get("limit", 100), maximum=100),
+                        cursor=None
+                        if arguments.get("cursor") is None
+                        else _text(arguments["cursor"], maximum=2_048),
+                    ),
+                    _freshness(arguments.get("freshness")),
+                ),
             )
         if tool_name == "list_materials":
             arguments = _arguments(
                 raw_arguments,
-                allowed=frozenset({"course_key", "freshness"}),
+                allowed=frozenset({"course_key", "freshness", "limit", "cursor"}),
                 required=frozenset({"course_key"}),
             )
             return cast(
                 ResultEnvelope[object],
                 self._service.list_materials(
                     _course(arguments["course_key"]),
-                    MaterialFilter(),
+                    MaterialFilter(
+                        limit=_integer(arguments.get("limit", 100), maximum=100),
+                        cursor=None
+                        if arguments.get("cursor") is None
+                        else _text(arguments["cursor"], maximum=2_048),
+                    ),
                     _freshness(arguments.get("freshness")),
                 ),
             )
@@ -257,7 +272,14 @@ class CodexToolDispatcher:
             arguments = _arguments(
                 raw_arguments,
                 allowed=frozenset(
-                    {"course_key", "window_since", "window_until", "limit", "freshness"}
+                    {
+                        "course_key",
+                        "window_since",
+                        "window_until",
+                        "limit",
+                        "freshness",
+                        "cursor",
+                    }
                 ),
                 required=frozenset({"course_key", "window_since", "window_until"}),
             )
@@ -268,18 +290,26 @@ class CodexToolDispatcher:
                     _window(arguments),
                     _freshness(arguments.get("freshness")),
                     limit=_integer(arguments.get("limit", 100), maximum=100),
+                    cursor=None
+                    if arguments.get("cursor") is None
+                    else _text(arguments["cursor"], maximum=2_048),
                 ),
             )
         if tool_name == "search":
             arguments = _arguments(
                 raw_arguments,
-                allowed=frozenset({"query", "course_key", "limit", "neighbor_count", "freshness"}),
+                allowed=frozenset(
+                    {"query", "course_key", "limit", "neighbor_count", "freshness", "cursor"}
+                ),
                 required=frozenset({"query"}),
             )
             query = SearchQuery(
                 _text(arguments["query"]),
                 limit=_integer(arguments.get("limit", 20), maximum=100),
                 neighbor_count=_integer(arguments.get("neighbor_count", 1), minimum=0, maximum=5),
+                cursor=None
+                if arguments.get("cursor") is None
+                else _text(arguments["cursor"], maximum=2_048),
             )
             freshness = _freshness(arguments.get("freshness"))
             if arguments.get("course_key") is None:
@@ -288,7 +318,7 @@ class CodexToolDispatcher:
         if tool_name in {"get_announcements", "get_assessments"}:
             arguments = _arguments(
                 raw_arguments,
-                allowed=frozenset({"course_key", "freshness"}),
+                allowed=frozenset({"course_key", "freshness", "limit", "cursor"}),
                 required=frozenset({"course_key"}),
             )
             course = _course(arguments["course_key"])
@@ -296,20 +326,42 @@ class CodexToolDispatcher:
             if tool_name == "get_announcements":
                 return cast(
                     ResultEnvelope[object],
-                    self._service.get_announcements(course, AnnouncementFilter(), freshness),
+                    self._service.get_announcements(
+                        course,
+                        AnnouncementFilter(
+                            limit=_integer(arguments.get("limit", 100), maximum=100),
+                            cursor=None
+                            if arguments.get("cursor") is None
+                            else _text(arguments["cursor"], maximum=2_048),
+                        ),
+                        freshness,
+                    ),
                 )
             return cast(
                 ResultEnvelope[object],
-                self._service.get_assessments(course, AssessmentFilter(), freshness),
+                self._service.get_assessments(
+                    course,
+                    AssessmentFilter(
+                        limit=_integer(arguments.get("limit", 100), maximum=100),
+                        cursor=None
+                        if arguments.get("cursor") is None
+                        else _text(arguments["cursor"], maximum=2_048),
+                    ),
+                    freshness,
+                ),
             )
         if tool_name == "get_events":
             arguments = _arguments(
                 raw_arguments,
-                allowed=frozenset({"course_key", "freshness"}),
+                allowed=frozenset({"course_key", "freshness", "limit", "cursor"}),
             )
             course_value = arguments.get("course_key")
             event_filter = EventFilter(
                 course=None if course_value is None else _course(course_value),
+                limit=_integer(arguments.get("limit", 100), maximum=100),
+                cursor=None
+                if arguments.get("cursor") is None
+                else _text(arguments["cursor"], maximum=2_048),
             )
             return cast(
                 ResultEnvelope[object],
@@ -318,7 +370,16 @@ class CodexToolDispatcher:
         if tool_name == "get_upcoming_events":
             arguments = _arguments(
                 raw_arguments,
-                allowed=frozenset({"window_since", "window_until", "course_key", "freshness"}),
+                allowed=frozenset(
+                    {
+                        "window_since",
+                        "window_until",
+                        "course_key",
+                        "freshness",
+                        "limit",
+                        "cursor",
+                    }
+                ),
                 required=frozenset({"window_since", "window_until"}),
             )
             course_value = arguments.get("course_key")
@@ -328,6 +389,10 @@ class CodexToolDispatcher:
                     _window(arguments),
                     None if course_value is None else _course(course_value),
                     _freshness(arguments.get("freshness")),
+                    limit=_integer(arguments.get("limit", 100), maximum=100),
+                    cursor=None
+                    if arguments.get("cursor") is None
+                    else _text(arguments["cursor"], maximum=2_048),
                 ),
             )
         if tool_name == "resolve_source":

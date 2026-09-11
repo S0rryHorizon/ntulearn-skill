@@ -92,8 +92,11 @@ reads and delayed inventories. Content/course availability is not inferred from 
 those entities do not yet have an immutable lifecycle observation table. Local bytes and
 all provenance remain retained. Repeated omissions never establish remote deletion.
 
-Local jobs carry durable configuration contracts and exact parse dependencies. A changed
-service contract fails safely; a current plan creates the appropriate new input identity.
+Local jobs carry durable configuration contracts and exact parse dependencies. Extract jobs
+bind both the extractor version and deterministic rule-settings hash, so a settings revision
+creates new extraction and reconciliation work. Legacy job rows without that hash remain
+readable for audit; unfinished legacy work fails the executable contract and requires a current
+plan. A changed service contract fails safely; a current plan creates the appropriate new input identity.
 Bounded/uncompleted processing and postcommit receipt, job, or browse repair gaps produce
 partial scope results. Repeated identical source snapshots reuse their first exact
 observation provenance while current freshness is recorded separately.

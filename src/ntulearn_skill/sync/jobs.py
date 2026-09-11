@@ -124,6 +124,13 @@ def _required_key(payload: dict[str, JsonValue], key: str) -> int:
     return value
 
 
+def _required_digest(payload: dict[str, JsonValue], key: str) -> str:
+    value = _required_text(payload, key)
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("local job digest spec is invalid")
+    return value
+
+
 def _parser_options(payload: dict[str, JsonValue]) -> ParserOptions:
     settings = payload.get("parser_settings")
     if not isinstance(settings, dict) or set(settings) != {"diagnostics", "limits"}:
@@ -185,11 +192,15 @@ def _validate_payload(kind: LocalJobKind, payload: dict[str, JsonValue]) -> None
         return
     if kind is LocalJobKind.EXTRACT:
         target = {"version_key"} if "version_key" in payload else {"observation_key"}
-        if set(payload) != target | {"extractor_name", "extractor_version"}:
+        legacy = target | {"extractor_name", "extractor_version"}
+        current = legacy | {"extractor_settings_hash"}
+        if set(payload) not in {frozenset(legacy), frozenset(current)}:
             raise ValueError("local extraction job spec is invalid")
         _required_key(payload, next(iter(target)))
         _required_text(payload, "extractor_name")
         _required_text(payload, "extractor_version")
+        if "extractor_settings_hash" in payload:
+            _required_digest(payload, "extractor_settings_hash")
         return
     if kind is LocalJobKind.RECONCILE:
         if set(payload) != {"course_key", "resolver_name", "resolver_version"}:
@@ -632,6 +643,7 @@ class LocalJobPlanner:
                     "parse_identity": parse_identity,
                     "extractor_name": self.extractor.name,
                     "extractor_version": self.extractor.version,
+                    "extractor_settings_hash": self.extractor.settings_hash,
                 }
             )
             extract = self.queue.schedule(
@@ -641,6 +653,7 @@ class LocalJobPlanner:
                     "version_key": version_key,
                     "extractor_name": self.extractor.name,
                     "extractor_version": self.extractor.version,
+                    "extractor_settings_hash": self.extractor.settings_hash,
                 },
                 depends_on_job_key=parse.key,
                 max_attempts=self.max_attempts,
@@ -718,6 +731,7 @@ class LocalJobPlanner:
                     "source_object_key": int(row["source_object_key"]),
                     "extractor_name": self.extractor.name,
                     "extractor_version": self.extractor.version,
+                    "extractor_settings_hash": self.extractor.settings_hash,
                 }
             )
             canonical_observation_key = int(row["canonical_observation_key"])
@@ -728,6 +742,7 @@ class LocalJobPlanner:
                     "observation_key": canonical_observation_key,
                     "extractor_name": self.extractor.name,
                     "extractor_version": self.extractor.version,
+                    "extractor_settings_hash": self.extractor.settings_hash,
                 },
                 max_attempts=self.max_attempts,
                 connection=active,
@@ -869,9 +884,12 @@ class LocalJobRunner:
             index_result = self.search_index.rebuild()
             return {"source_generation": index_result.source_generation}
         if job.kind is LocalJobKind.EXTRACT:
+            planned_settings_hash = job.payload.get("extractor_settings_hash")
             if (
                 _required_text(job.payload, "extractor_name") != self.extractor.name
                 or _required_text(job.payload, "extractor_version") != self.extractor.version
+                or not isinstance(planned_settings_hash, str)
+                or planned_settings_hash != self.extractor.settings_hash
             ):
                 raise LocalJobContractMismatch("queued extractor contract is unavailable")
             if "version_key" in job.payload:

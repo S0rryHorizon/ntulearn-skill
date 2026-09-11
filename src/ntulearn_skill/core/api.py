@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import os
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, TypeAlias, TypeVar, cast
+from typing import Any, Generic, TypeAlias, TypeVar, cast
 
 from ntulearn_skill.client import (
     AuthenticationRequired,
@@ -42,9 +45,13 @@ from ntulearn_skill.events import (
     CandidateFieldName,
     CanonicalEvent,
     DeterministicEventExtractor,
+    EventConfirmationBasis,
+    EventConfirmationBasisKind,
     EventReconciler,
     EventResolutionState,
+    EventReview,
     EventType,
+    EventWordingConflict,
     ManualFieldResolution,
     ManualIdentityResolution,
 )
@@ -116,6 +123,13 @@ def _bounded_limit(value: int) -> None:
         raise ValueError("limit must be between 1 and 100")
 
 
+def _bounded_cursor(value: str | None) -> None:
+    if value is not None and (
+        not isinstance(value, str) or not value or not value.isascii() or len(value) > 2_048
+    ):
+        raise ValueError("cursor must be bounded ASCII text")
+
+
 @dataclass(frozen=True, slots=True)
 class CourseRef:
     local_key: int | None = None
@@ -157,9 +171,11 @@ class SourceLocatorRef:
 class CourseFilter:
     availability: frozenset[Availability] = field(default_factory=frozenset)
     limit: int = _DEFAULT_LIMIT
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         _bounded_limit(self.limit)
+        _bounded_cursor(self.cursor)
         if any(not isinstance(item, Availability) for item in self.availability):
             raise TypeError("course availability filters must be typed")
 
@@ -170,9 +186,11 @@ class MaterialFilter:
     file_formats: frozenset[str] = field(default_factory=frozenset)
     include_historical_versions: bool = False
     limit: int = _DEFAULT_LIMIT
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         _bounded_limit(self.limit)
+        _bounded_cursor(self.cursor)
         if any(not isinstance(item, Availability) for item in self.availability):
             raise TypeError("material availability filters must be typed")
         if any(item not in {"pdf", "docx", "pptx", "unknown"} for item in self.file_formats):
@@ -183,9 +201,11 @@ class MaterialFilter:
 class AnnouncementFilter:
     availability: frozenset[Availability] = field(default_factory=frozenset)
     limit: int = _DEFAULT_LIMIT
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         _bounded_limit(self.limit)
+        _bounded_cursor(self.cursor)
         if any(not isinstance(item, Availability) for item in self.availability):
             raise TypeError("announcement availability filters must be typed")
 
@@ -195,9 +215,11 @@ class AssessmentFilter:
     subtypes: frozenset[AssessmentSubtype] = field(default_factory=frozenset)
     availability: frozenset[Availability] = field(default_factory=frozenset)
     limit: int = _DEFAULT_LIMIT
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         _bounded_limit(self.limit)
+        _bounded_cursor(self.cursor)
         if any(not isinstance(item, AssessmentSubtype) for item in self.subtypes):
             raise TypeError("assessment subtype filters must be typed")
         if any(not isinstance(item, Availability) for item in self.availability):
@@ -211,9 +233,11 @@ class EventFilter:
     window: TimeWindow | None = None
     include_cancelled: bool = True
     limit: int = _DEFAULT_LIMIT
+    cursor: str | None = None
 
     def __post_init__(self) -> None:
         _bounded_limit(self.limit)
+        _bounded_cursor(self.cursor)
         if self.course is not None and not isinstance(self.course, CourseRef):
             raise TypeError("event course filter must be typed")
         if any(not isinstance(item, EventType) for item in self.event_types):
@@ -354,6 +378,22 @@ ManualResolution: TypeAlias = ManualFieldResolution | ManualIdentityResolution
 R = TypeVar("R")
 
 
+@dataclass(frozen=True, slots=True)
+class _PageLoad(Generic[R]):
+    items: tuple[R, ...]
+    provenance: tuple[ProvenanceView, ...]
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _Pagination:
+    operation: str
+    binding: str
+    offset: int
+    limit: int
+    revision: str
+
+
 class CoreService:
     """Cohesive local query facade with an optional injected read-only sync engine."""
 
@@ -421,16 +461,23 @@ class CoreService:
     ) -> ResultEnvelope[CourseSummary]:
         operation = "list_courses"
         try:
+            pagination = self._pagination(
+                operation,
+                filter.cursor,
+                {"availability": sorted(item.value for item in filter.availability)},
+                filter.limit,
+            )
             providers = self._providers()
             if not providers and self.sync_engine is not None:
                 providers = (self.sync_engine.source.provider_name,)
             scopes = tuple(ScopeKey(provider, None, "courses") for provider in providers)
             return self._query(
                 operation,
-                lambda: self._load_courses(filter),
+                lambda: self._load_courses(filter, pagination.offset),
                 scopes,
                 freshness,
                 bounded_limit=filter.limit,
+                pagination=pagination,
             )
         except Exception as error:
             return self._failure(operation, error, "courses")
@@ -444,13 +491,25 @@ class CoreService:
         operation = "list_materials"
         try:
             course_id, course_key = self._course(course)
+            pagination = self._pagination(
+                operation,
+                filter.cursor,
+                {
+                    "availability": sorted(item.value for item in filter.availability),
+                    "file_formats": sorted(filter.file_formats),
+                    "include_historical_versions": filter.include_historical_versions,
+                    "course": [course_id.provider, course_id.value],
+                },
+                filter.limit,
+            )
             scope = ScopeKey(course_id.provider, course_id, "content")
             return self._query(
                 operation,
-                lambda: self._load_materials(course_id, course_key, filter),
+                lambda: self._load_materials(course_id, course_key, filter, pagination.offset),
                 (scope,),
                 freshness,
                 bounded_limit=filter.limit,
+                pagination=pagination,
                 extra_coverage=lambda: (self._parse_coverage(course_id, course_key),),
             )
         except Exception as error:
@@ -534,6 +593,7 @@ class CoreService:
         freshness: FreshnessRequirement = FreshnessRequirement.cache_only(),
         *,
         limit: int = _DEFAULT_LIMIT,
+        cursor: str | None = None,
     ) -> ResultEnvelope[MaterialChangeView]:
         """Return changes proven by resource observations inside a bounded window."""
 
@@ -542,7 +602,20 @@ class CoreService:
             if not isinstance(window, TimeWindow):
                 raise TypeError("material change window must be typed")
             _bounded_limit(limit)
+            _bounded_cursor(cursor)
             course_id, course_key = self._course(course)
+            pagination = self._pagination(
+                operation,
+                cursor,
+                {
+                    "course": [course_id.provider, course_id.value],
+                    "window": [
+                        to_storage_time(window.since),
+                        to_storage_time(window.until),
+                    ],
+                },
+                limit,
+            )
             scope = ScopeKey(course_id.provider, course_id, "content")
 
             def observation_coverage() -> tuple[CoverageView, ...]:
@@ -562,10 +635,13 @@ class CoreService:
 
             return self._query(
                 operation,
-                lambda: self._load_recent_material_changes(course_id, course_key, window, limit),
+                lambda: self._load_recent_material_changes(
+                    course_id, course_key, window, limit, pagination.offset
+                ),
                 (scope,),
                 freshness,
                 bounded_limit=limit,
+                pagination=pagination,
                 extra_coverage=observation_coverage,
             )
         except Exception as error:
@@ -575,8 +651,10 @@ class CoreService:
         self,
         query: SearchQuery,
         freshness: FreshnessRequirement = FreshnessRequirement.cache_only(),
+        *,
+        _operation: str = "search",
     ) -> ResultEnvelope[object]:
-        operation = "search"
+        operation = _operation
         try:
             if not isinstance(query, SearchQuery):
                 raise TypeError("search query must be typed")
@@ -590,6 +668,34 @@ class CoreService:
                     query,
                     filters=replace(query.filters, include_historical_versions=False),
                 )
+            search_filters = effective_query.filters
+            if effective_query.cursor is None:
+                # Establish the deterministic local index before capturing the
+                # page revision.  Subsequent continuation calls are read-only.
+                with self.database.transaction() as connection:
+                    self.search_service.index.ensure_current(connection)
+            pagination = self._pagination(
+                operation,
+                effective_query.cursor,
+                {
+                    "text": effective_query.text,
+                    "course": None
+                    if search_filters.course is None
+                    else [search_filters.course.provider, search_filters.course.value],
+                    "entity_kinds": sorted(item.value for item in search_filters.entity_kinds),
+                    "semantic_types": sorted(item.value for item in search_filters.semantic_types),
+                    "file_formats": sorted(search_filters.file_formats),
+                    "availabilities": sorted(item.value for item in search_filters.availabilities),
+                    "text_origins": sorted(item.value for item in search_filters.text_origins),
+                    "version_key": search_filters.version_key,
+                    "minimum_classification_confidence": (
+                        search_filters.minimum_classification_confidence
+                    ),
+                    "include_historical_versions": search_filters.include_historical_versions,
+                    "neighbor_count": effective_query.neighbor_count,
+                },
+                effective_query.limit,
+            )
             courses = self._course_id_rows(effective_query.filters.course)
             scopes = self._search_scopes(
                 courses,
@@ -603,8 +709,10 @@ class CoreService:
             context_events: list[CanonicalEvent] = []
             unresolved_matches: list[bool] = []
 
-            def load_search() -> tuple[tuple[object, ...], tuple[ProvenanceView, ...]]:
-                result = self.search_service.search(effective_query)
+            def load_search() -> _PageLoad[object]:
+                result = self.search_service.search(
+                    replace(effective_query, cursor=None), offset=pagination.offset
+                )
                 loaded.clear()
                 loaded.append(result)
                 events, unresolved = self._search_event_context(result)
@@ -623,7 +731,7 @@ class CoreService:
                     )
                     for hit in result.items
                 )
-                return tuple(result.items), provenance
+                return _PageLoad(tuple(result.items), provenance, result.truncated)
 
             def search_coverage() -> tuple[CoverageView, ...]:
                 result = loaded[0]
@@ -689,6 +797,7 @@ class CoreService:
                 extra_warnings=search_warnings,
                 context_events=lambda: tuple(context_events),
                 historical=effective_query.filters.version_key is not None,
+                pagination=pagination,
             )
         except Exception as error:
             return self._failure(operation, error, "search")
@@ -704,11 +813,10 @@ class CoreService:
             course_id, _ = self._course(course)
             if query.filters.course is not None and query.filters.course != course_id:
                 raise ValueError("search query course does not match the requested course")
-            return replace(
-                self.search(
-                    replace(query, filters=replace(query.filters, course=course_id)), freshness
-                ),
-                operation=operation,
+            return self.search(
+                replace(query, filters=replace(query.filters, course=course_id)),
+                freshness,
+                _operation=operation,
             )
         except Exception as error:
             return self._failure(operation, error, "search")
@@ -722,12 +830,22 @@ class CoreService:
         operation = "get_announcements"
         try:
             course_id, course_key = self._course(course)
+            pagination = self._pagination(
+                operation,
+                filter.cursor,
+                {
+                    "availability": sorted(item.value for item in filter.availability),
+                    "course": [course_id.provider, course_id.value],
+                },
+                filter.limit,
+            )
             return self._query(
                 operation,
-                lambda: self._load_announcements(course_id, course_key, filter),
+                lambda: self._load_announcements(course_id, course_key, filter, pagination.offset),
                 (ScopeKey(course_id.provider, course_id, "announcements"),),
                 freshness,
                 bounded_limit=filter.limit,
+                pagination=pagination,
             )
         except Exception as error:
             return self._failure(operation, error, "announcements")
@@ -741,12 +859,23 @@ class CoreService:
         operation = "get_assessments"
         try:
             course_id, course_key = self._course(course)
+            pagination = self._pagination(
+                operation,
+                filter.cursor,
+                {
+                    "subtypes": sorted(item.value for item in filter.subtypes),
+                    "availability": sorted(item.value for item in filter.availability),
+                    "course": [course_id.provider, course_id.value],
+                },
+                filter.limit,
+            )
             return self._query(
                 operation,
-                lambda: self._load_assessments(course_id, course_key, filter),
+                lambda: self._load_assessments(course_id, course_key, filter, pagination.offset),
                 (ScopeKey(course_id.provider, course_id, "assessments"),),
                 freshness,
                 bounded_limit=filter.limit,
+                pagination=pagination,
             )
         except Exception as error:
             return self._failure(operation, error, "assessments")
@@ -755,20 +884,47 @@ class CoreService:
         self,
         filter: EventFilter = EventFilter(),
         freshness: FreshnessRequirement = FreshnessRequirement.cache_only(),
+        *,
+        _operation: str = "get_events",
     ) -> ResultEnvelope[CanonicalEvent]:
-        operation = "get_events"
+        operation = _operation
         try:
+            pagination = self._pagination(
+                operation,
+                filter.cursor,
+                {
+                    "course": None
+                    if filter.course is None
+                    else {
+                        "local_key": filter.course.local_key,
+                        "remote_id": None
+                        if filter.course.remote_id is None
+                        else [filter.course.remote_id.provider, filter.course.remote_id.value],
+                    },
+                    "event_types": sorted(item.value for item in filter.event_types),
+                    "window": None
+                    if filter.window is None
+                    else [
+                        to_storage_time(filter.window.since),
+                        to_storage_time(filter.window.until),
+                    ],
+                    "include_cancelled": filter.include_cancelled,
+                },
+                filter.limit,
+            )
             courses = self._event_courses(filter.course)
             scopes = self._event_scopes(
                 courses, filter.window, include_inventory=filter.course is None
             )
             loaded_events: list[tuple[CanonicalEvent, ...]] = []
 
-            def load_events() -> tuple[tuple[CanonicalEvent, ...], tuple[ProvenanceView, ...]]:
-                items, provenance = self._load_events(self._event_courses(filter.course), filter)
+            def load_events() -> _PageLoad[CanonicalEvent]:
+                page = self._load_events(
+                    self._event_courses(filter.course), filter, pagination.offset
+                )
                 loaded_events.clear()
-                loaded_events.append(items)
-                return items, provenance
+                loaded_events.append(page.items)
+                return page
 
             return self._query(
                 operation,
@@ -776,6 +932,7 @@ class CoreService:
                 scopes,
                 freshness,
                 bounded_limit=filter.limit,
+                pagination=pagination,
                 extra_coverage=lambda: (
                     tuple(
                         self._parse_coverage(course, key)
@@ -808,12 +965,16 @@ class CoreService:
         window: TimeWindow,
         course: CourseRef | None = None,
         freshness: FreshnessRequirement = FreshnessRequirement.cache_only(),
+        *,
+        limit: int = _DEFAULT_LIMIT,
+        cursor: str | None = None,
     ) -> ResultEnvelope[CanonicalEvent]:
         if not isinstance(window, TimeWindow):
             return self._failure("get_upcoming_events", TypeError("window must be typed"), "events")
-        return replace(
-            self.get_events(EventFilter(course=course, window=window), freshness),
-            operation="get_upcoming_events",
+        return self.get_events(
+            EventFilter(course=course, window=window, limit=limit, cursor=cursor),
+            freshness,
+            _operation="get_upcoming_events",
         )
 
     def get_resource(
@@ -1017,7 +1178,9 @@ class CoreService:
                 event = self.events.resolve_event_source(decision)
             else:
                 raise TypeError("manual resolution decision must be typed")
-            return self._event_envelope(operation, (event,), Coverage.COMPLETE)
+            return self._event_envelope(
+                operation, self._with_event_reviews((event,)), Coverage.COMPLETE
+            )
         except Exception as error:
             return self._failure(operation, error, "manual_resolution")
 
@@ -1121,7 +1284,7 @@ class CoreService:
     def _query(
         self,
         operation: str,
-        load: Callable[[], tuple[tuple[R, ...], tuple[ProvenanceView, ...]]],
+        load: Callable[[], tuple[tuple[R, ...], tuple[ProvenanceView, ...]] | _PageLoad[R]],
         scopes: tuple[ScopeKey, ...],
         requirement: FreshnessRequirement,
         *,
@@ -1130,10 +1293,17 @@ class CoreService:
         extra_warnings: Callable[[], tuple[SafeWarning, ...]] | None = None,
         context_events: Callable[[], tuple[CanonicalEvent, ...]] | None = None,
         historical: bool = False,
+        pagination: _Pagination | None = None,
     ) -> ResultEnvelope[R]:
         if not isinstance(requirement, FreshnessRequirement):
             raise TypeError("freshness requirement must be typed")
-        items, provenance = load()
+        loaded = load()
+        if isinstance(loaded, _PageLoad):
+            items, provenance = loaded.items, loaded.provenance
+            truncated = loaded.truncated
+        else:
+            items, provenance = loaded
+            truncated = False
         evaluation_time = self._now()
         decisions = tuple(self._freshness(scope, requirement, evaluation_time) for scope in scopes)
         refresh_targets = tuple(
@@ -1144,6 +1314,10 @@ class CoreService:
         refresh_attempted = False
         refresh_errors: list[SafeError] = []
         refresh_warnings: list[SafeWarning] = []
+        if pagination is not None and pagination.offset and refresh_targets:
+            raise ValueError(
+                "a continuation page cannot refresh source data; restart from the first page"
+            )
         if (
             not scopes
             and self.sync_engine is None
@@ -1184,7 +1358,15 @@ class CoreService:
                         refresh_errors.append(
                             self._safe_error(operation, error, self._scope_name(scope))
                         )
-                items, provenance = load()
+                if pagination is not None:
+                    pagination = replace(pagination, revision=self._database_revision())
+                loaded = load()
+                if isinstance(loaded, _PageLoad):
+                    items, provenance = loaded.items, loaded.provenance
+                    truncated = loaded.truncated
+                else:
+                    items, provenance = loaded
+                    truncated = False
                 decisions = tuple(
                     self._freshness(scope, requirement, evaluation_time) for scope in scopes
                 )
@@ -1201,7 +1383,8 @@ class CoreService:
         coverage = tuple(self._coverage(scope) for scope in scopes)
         if extra_coverage is not None:
             coverage += extra_coverage()
-        completeness = self._aggregate_coverage(coverage)
+        source_completeness = self._aggregate_coverage(coverage)
+        completeness = source_completeness
         if any(decision.status is FreshnessStatus.UNKNOWN for decision in decisions):
             completeness = self._worse(completeness, Coverage.UNKNOWN)
         elif any(decision.status is FreshnessStatus.STALE for decision in decisions):
@@ -1227,7 +1410,8 @@ class CoreService:
             for view in coverage
             if view.coverage is not Coverage.COMPLETE
         )
-        if len(items) >= bounded_limit:
+        next_cursor = None
+        if truncated:
             warnings.append(
                 SafeWarning(
                     "result_limit_reached",
@@ -1235,11 +1419,23 @@ class CoreService:
                     operation,
                 )
             )
+            if pagination is None:
+                raise ValueError("truncated query is missing pagination metadata")
+            next_cursor = self._encode_cursor(
+                pagination.operation,
+                pagination.binding,
+                pagination.offset + bounded_limit,
+                bounded_limit,
+                pagination.revision,
+            )
+            # ``completeness`` retains its pre-pagination compatibility meaning.
+            # New callers should inspect ``source_completeness`` and ``truncated``
+            # independently.
             if completeness is Coverage.COMPLETE:
                 completeness = Coverage.PARTIAL
         if (
             any(not decision.satisfied for decision in decisions)
-            or completeness is not Coverage.COMPLETE
+            or source_completeness is not Coverage.COMPLETE
         ) and requirement.mode.value not in {
             "CACHE_ONLY",
             "ALLOW_STALE",
@@ -1278,6 +1474,8 @@ class CoreService:
                     "events",
                 )
             )
+        if pagination is not None and self._database_revision() != pagination.revision:
+            raise ValueError("local data changed while reading a page; restart from the first page")
         return ResultEnvelope(
             operation,
             items,
@@ -1291,11 +1489,15 @@ class CoreService:
             as_of=min(as_of_values) if as_of_values else None,
             refresh_attempted=refresh_attempted,
             local_reads=2 if refresh_attempted else 1,
+            next_cursor=next_cursor,
+            truncated=truncated,
+            source_completeness=source_completeness,
+            freshness_satisfied=(
+                None if not decisions else all(decision.satisfied for decision in decisions)
+            ),
         )
 
-    def _load_courses(
-        self, filter: CourseFilter
-    ) -> tuple[tuple[CourseSummary, ...], tuple[ProvenanceView, ...]]:
+    def _load_courses(self, filter: CourseFilter, offset: int = 0) -> _PageLoad[CourseSummary]:
         clauses: list[str] = []
         values: list[object] = []
         if filter.availability:
@@ -1303,7 +1505,7 @@ class CoreService:
             values.extend(
                 item.value for item in sorted(filter.availability, key=lambda item: item.value)
             )
-        values.append(filter.limit)
+        values.extend((filter.limit + 1, offset))
         where = "" if not clauses else "WHERE " + " AND ".join(clauses)
         connection = self.database.connect()
         try:
@@ -1312,11 +1514,14 @@ class CoreService:
                     object.remote_key, provider.name AS provider
                 FROM course JOIN source_object object USING(source_object_key)
                 JOIN source_provider provider USING(provider_key)
-                {where} ORDER BY course.code, course.title, course.course_key LIMIT ?""",
+                {where} ORDER BY course.code, course.title, course.course_key
+                LIMIT ? OFFSET ?""",
                 values,
             ).fetchall()
         finally:
             connection.close()
+        truncated = len(rows) > filter.limit
+        rows = rows[: filter.limit]
         items = tuple(
             CourseSummary(
                 int(row["course_key"]),
@@ -1336,11 +1541,11 @@ class CoreService:
             )
             for item, row in zip(items, rows, strict=True)
         )
-        return items, provenance
+        return _PageLoad(items, provenance, truncated)
 
     def _load_materials(
-        self, course: CourseId, course_key: int, filter: MaterialFilter
-    ) -> tuple[tuple[MaterialSummary, ...], tuple[ProvenanceView, ...]]:
+        self, course: CourseId, course_key: int, filter: MaterialFilter, offset: int = 0
+    ) -> _PageLoad[MaterialSummary]:
         clauses = ["content.course_key = ?"]
         values: list[object] = [course_key]
         if filter.availability:
@@ -1359,7 +1564,7 @@ class CoreService:
             else "LEFT JOIN resource_version version ON "
             "version.version_key = resource.current_version_key"
         )
-        values.append(filter.limit)
+        values.extend((filter.limit + 1, offset))
         semantic_type_sql = _classification_sql("semantic_type")
         confidence_sql = _classification_sql("confidence")
         connection = self.database.connect()
@@ -1376,11 +1581,13 @@ class CoreService:
                 {version_join}
                 WHERE {" AND ".join(clauses)}
                 ORDER BY resource.display_title, resource.resource_key,
-                         version.version_number LIMIT ?""",
+                         version.version_number LIMIT ? OFFSET ?""",
                 values,
             ).fetchall()
         finally:
             connection.close()
+        truncated = len(rows) > filter.limit
+        rows = rows[: filter.limit]
         items = tuple(
             MaterialSummary(
                 int(row["resource_key"]),
@@ -1413,7 +1620,7 @@ class CoreService:
             )
             for item, row in zip(items, rows, strict=True)
         )
-        return items, provenance
+        return _PageLoad(items, provenance, truncated)
 
     def _load_library_status(
         self, courses: tuple[tuple[CourseId, int], ...]
@@ -1544,7 +1751,8 @@ class CoreService:
         course_key: int,
         window: TimeWindow,
         limit: int,
-    ) -> tuple[tuple[MaterialChangeView, ...], tuple[ProvenanceView, ...]]:
+        offset: int = 0,
+    ) -> _PageLoad[MaterialChangeView]:
         connection = self.database.connect()
         try:
             rows = connection.execute(
@@ -1602,12 +1810,13 @@ class CoreService:
                     )
                   )
                 ORDER BY history.observed_at DESC, history.observation_key DESC
-                LIMIT ?""",
+                LIMIT ? OFFSET ?""",
                 (
                     course_key,
                     to_storage_time(window.since),
                     to_storage_time(window.until),
-                    limit,
+                    limit + 1,
+                    offset,
                 ),
             ).fetchall()
         finally:
@@ -1634,6 +1843,8 @@ class CoreService:
                 values.append("AVAILABILITY_CHANGED")
             return tuple(values)
 
+        truncated = len(rows) > limit
+        rows = rows[:limit]
         items = tuple(
             MaterialChangeView(
                 int(row["resource_key"]),
@@ -1658,11 +1869,11 @@ class CoreService:
             )
             for item in items
         )
-        return items, provenance
+        return _PageLoad(items, provenance, truncated)
 
     def _load_announcements(
-        self, course: CourseId, course_key: int, filter: AnnouncementFilter
-    ) -> tuple[tuple[AnnouncementView, ...], tuple[ProvenanceView, ...]]:
+        self, course: CourseId, course_key: int, filter: AnnouncementFilter, offset: int = 0
+    ) -> _PageLoad[AnnouncementView]:
         clauses = ["announcement.course_key = ?"]
         values: list[object] = [course_key]
         if filter.availability:
@@ -1672,18 +1883,20 @@ class CoreService:
             values.extend(
                 item.value for item in sorted(filter.availability, key=lambda item: item.value)
             )
-        values.append(filter.limit)
+        values.extend((filter.limit + 1, offset))
         connection = self.database.connect()
         try:
             rows = connection.execute(
                 f"""SELECT announcement.*, object.remote_key FROM announcement
                 JOIN source_object object USING(source_object_key)
                 WHERE {" AND ".join(clauses)}
-                ORDER BY announcement.announcement_key DESC LIMIT ?""",
+                ORDER BY announcement.announcement_key DESC LIMIT ? OFFSET ?""",
                 values,
             ).fetchall()
         finally:
             connection.close()
+        truncated = len(rows) > filter.limit
+        rows = rows[: filter.limit]
         items = tuple(
             AnnouncementView(
                 int(row["announcement_key"]),
@@ -1704,11 +1917,11 @@ class CoreService:
             )
             for row in rows
         )
-        return items, provenance
+        return _PageLoad(items, provenance, truncated)
 
     def _load_assessments(
-        self, course: CourseId, course_key: int, filter: AssessmentFilter
-    ) -> tuple[tuple[AssessmentView, ...], tuple[ProvenanceView, ...]]:
+        self, course: CourseId, course_key: int, filter: AssessmentFilter, offset: int = 0
+    ) -> _PageLoad[AssessmentView]:
         clauses = ["assessment.course_key = ?"]
         values: list[object] = [course_key]
         if filter.subtypes:
@@ -1723,17 +1936,20 @@ class CoreService:
             values.extend(
                 item.value for item in sorted(filter.availability, key=lambda item: item.value)
             )
-        values.append(filter.limit)
+        values.extend((filter.limit + 1, offset))
         connection = self.database.connect()
         try:
             rows = connection.execute(
                 f"""SELECT assessment.*, object.remote_key FROM assessment
                 JOIN source_object object USING(source_object_key)
-                WHERE {" AND ".join(clauses)} ORDER BY assessment.assessment_key DESC LIMIT ?""",
+                WHERE {" AND ".join(clauses)} ORDER BY assessment.assessment_key DESC
+                LIMIT ? OFFSET ?""",
                 values,
             ).fetchall()
         finally:
             connection.close()
+        truncated = len(rows) > filter.limit
+        rows = rows[: filter.limit]
         items = tuple(
             AssessmentView(
                 int(row["assessment_key"]),
@@ -1758,7 +1974,7 @@ class CoreService:
             )
             for row in rows
         )
-        return items, provenance
+        return _PageLoad(items, provenance, truncated)
 
     def _search_event_context(
         self, result: SearchResult
@@ -1788,8 +2004,11 @@ class CoreService:
         return events, unresolved
 
     def _load_events(
-        self, courses: tuple[tuple[CourseId, int], ...], filter: EventFilter
-    ) -> tuple[tuple[CanonicalEvent, ...], tuple[ProvenanceView, ...]]:
+        self,
+        courses: tuple[tuple[CourseId, int], ...],
+        filter: EventFilter,
+        offset: int = 0,
+    ) -> _PageLoad[CanonicalEvent]:
         events = [event for course, _ in courses for event in self.events.list_events(course)]
         if filter.event_types:
             events = [event for event in events if event.event_type in filter.event_types]
@@ -1802,7 +2021,9 @@ class CoreService:
         if filter.window is not None:
             events = [event for event in events if self._overlaps(event, filter.window)]
         events.sort(key=self._event_sort_key)
-        events = events[: filter.limit]
+        selected = events[offset : offset + filter.limit + 1]
+        truncated = len(selected) > filter.limit
+        events = list(self._with_event_reviews(tuple(selected[: filter.limit])))
         provenance = tuple(
             ProvenanceView(
                 source.evidence_kind, source.evidence_key, event.course.provider, event.course
@@ -1810,7 +2031,123 @@ class CoreService:
             for event in events
             for source in event.sources
         )
-        return tuple(events), provenance
+        return _PageLoad(tuple(events), provenance, truncated)
+
+    def _with_event_reviews(self, events: tuple[CanonicalEvent, ...]) -> tuple[CanonicalEvent, ...]:
+        if not events:
+            return ()
+        keys = tuple(event.key for event in events)
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                f"""SELECT manual_resolution_key, event_key, field_name,
+                           selected_claim_key, local_claim_key, reason
+                    FROM manual_field_resolution
+                    WHERE active = 1
+                      AND event_key IN ({",".join("?" for _ in keys)})
+                    ORDER BY manual_resolution_key""",
+                keys,
+            ).fetchall()
+        finally:
+            connection.close()
+        manual = {
+            (int(row["event_key"]), CandidateFieldName(str(row["field_name"]))): row for row in rows
+        }
+        reviewed: list[CanonicalEvent] = []
+        for event in events:
+            projections = {item.field_name: item for item in event.projections}
+            claims = {item.key: item for item in event.claims}
+            required = {CandidateFieldName.TITLE, CandidateFieldName.EVENT_TYPE}
+            if event.event_type in {EventType.ASSIGNMENT_DUE, EventType.SUBMISSION}:
+                required.add(CandidateFieldName.DUE_TIME)
+            elif CandidateFieldName.START_TIME in projections or event.due_time is None:
+                required.add(CandidateFieldName.START_TIME)
+            else:
+                required.add(CandidateFieldName.DUE_TIME)
+            canonical_fields = {
+                CandidateFieldName.TITLE,
+                CandidateFieldName.EVENT_TYPE,
+                CandidateFieldName.START_TIME,
+                CandidateFieldName.END_TIME,
+                CandidateFieldName.DUE_TIME,
+                CandidateFieldName.LOCATION,
+                CandidateFieldName.STATUS,
+            }
+            missing = tuple(
+                sorted(canonical_fields - projections.keys(), key=lambda item: item.value)
+            )
+            missing_required = tuple(
+                sorted(required - projections.keys(), key=lambda item: item.value)
+            )
+            review_fields = set(missing_required)
+            review_fields.update(item.field_name for item in event.projections if item.uncertain)
+            wording_conflicts: list[EventWordingConflict] = []
+            for conflict in event.conflicts:
+                if conflict.state.value != "OPEN":
+                    continue
+                review_fields.add(conflict.field_name)
+                projection = projections.get(conflict.field_name)
+                selected_claim = (
+                    None if projection is None else claims.get(projection.selected_claim_key)
+                )
+                alternatives = tuple(
+                    dict.fromkeys(
+                        claim.original_text
+                        for key in conflict.alternative_claim_keys
+                        if (claim := claims.get(key)) is not None
+                    )
+                )
+                wording_conflicts.append(
+                    EventWordingConflict(
+                        conflict.field_name,
+                        None if projection is None else projection.selected_claim_key,
+                        None if selected_claim is None else selected_claim.original_text,
+                        alternatives,
+                    )
+                )
+            bases: list[EventConfirmationBasis] = []
+            for projection in sorted(event.projections, key=lambda item: item.field_name.value):
+                selected_claim = claims.get(projection.selected_claim_key)
+                resolution = manual.get((event.key, projection.field_name))
+                if (
+                    resolution is not None
+                    and int(resolution["selected_claim_key"] or resolution["local_claim_key"])
+                    == projection.selected_claim_key
+                ):
+                    bases.append(
+                        EventConfirmationBasis(
+                            projection.field_name,
+                            projection.selected_claim_key,
+                            EventConfirmationBasisKind.MANUAL_RESOLUTION,
+                            str(resolution["reason"]),
+                            True,
+                            int(resolution["manual_resolution_key"]),
+                        )
+                    )
+                else:
+                    bases.append(
+                        EventConfirmationBasis(
+                            projection.field_name,
+                            projection.selected_claim_key,
+                            EventConfirmationBasisKind.DETERMINISTIC_RULE,
+                            "deterministic projection"
+                            if selected_claim is None
+                            else selected_claim.decision_reason,
+                            False,
+                        )
+                    )
+            review = EventReview(
+                identity_requires_review=event.resolution_state
+                is not EventResolutionState.RESOLVED,
+                fields_requiring_review=tuple(sorted(review_fields, key=lambda item: item.value)),
+                missing_fields=missing,
+                wording_conflicts=tuple(wording_conflicts),
+                confirmation_basis=tuple(bases),
+                required_fields=tuple(sorted(required, key=lambda item: item.value)),
+                missing_required_fields=missing_required,
+            )
+            reviewed.append(replace(event, review=review))
+        return tuple(reviewed)
 
     def _event_scopes(
         self,
@@ -2282,6 +2619,89 @@ class CoreService:
     ) -> FreshnessDecision:
         return evaluate_freshness(self.states.get(scope), requirement, now=now)
 
+    def _pagination(
+        self,
+        operation: str,
+        cursor: str | None,
+        filters: Mapping[str, object],
+        limit: int,
+    ) -> _Pagination:
+        binding = hashlib.sha256(
+            json.dumps(
+                {
+                    "database": hashlib.sha256(
+                        os.fsencode(os.path.abspath(self.database.path))
+                    ).hexdigest(),
+                    "filters": filters,
+                    "limit": limit,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("ascii")
+        ).hexdigest()
+        revision = self._database_revision()
+        if cursor is None:
+            return _Pagination(operation, binding, 0, limit, revision)
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            raw = base64.urlsafe_b64decode((cursor + padding).encode("ascii"))
+            payload = json.loads(raw.decode("ascii"))
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != {"v", "operation", "binding", "offset", "revision"}
+                or payload["v"] != 1
+                or payload["operation"] != operation
+                or payload["binding"] != binding
+                or payload["revision"] != revision
+                or isinstance(payload["offset"], bool)
+                or not isinstance(payload["offset"], int)
+                or payload["offset"] <= 0
+            ):
+                raise ValueError
+        except Exception:
+            raise ValueError(
+                "pagination cursor is invalid or local data changed; restart from the first page"
+            ) from None
+        return _Pagination(operation, binding, int(payload["offset"]), limit, revision)
+
+    def _encode_cursor(
+        self, operation: str, binding: str, offset: int, limit: int, revision: str
+    ) -> str:
+        if offset <= 0 or not 1 <= limit <= 100:
+            raise ValueError("pagination state is invalid")
+        payload = json.dumps(
+            {
+                "v": 1,
+                "operation": operation,
+                "binding": binding,
+                "offset": offset,
+                "revision": revision,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+        return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+
+    def _database_revision(self) -> str:
+        """Fingerprint one logical SQLite snapshot for continuation validation.
+
+        Hashing SQLite's serialized view includes committed WAL content but remains
+        stable when an unchanged WAL is checkpointed or removed as connections close.
+        The caller compares snapshots before and after every page; this is an
+        optimistic change guard, not a cross-call database transaction.
+        """
+
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN")
+            # Establish a read snapshot before serializing the logical database.
+            connection.execute("SELECT count(*) FROM sqlite_schema").fetchone()
+            serialized = connection.serialize()
+        finally:
+            connection.close()
+        return hashlib.sha256(serialized).hexdigest()
+
     def _freshness_view(self, scope: ScopeKey, decision: FreshnessDecision) -> FreshnessView:
         return FreshnessView(
             self._scope_name(scope),
@@ -2290,6 +2710,18 @@ class CoreService:
             None if decision.age is None else int(decision.age.total_seconds()),
             decision.satisfied,
             tuple(code.value for code in decision.warning_codes),
+            decision.successful_observation_at,
+            None
+            if decision.successful_observation_age is None
+            else int(decision.successful_observation_age.total_seconds()),
+            decision.complete_snapshot_at,
+            None
+            if decision.complete_snapshot_age is None
+            else int(decision.complete_snapshot_age.total_seconds()),
+            None if decision.max_age is None else int(decision.max_age.total_seconds()),
+            decision.ttl_configured,
+            decision.latest_coverage,
+            None if decision.last_attempt_outcome is None else decision.last_attempt_outcome.value,
         )
 
     def _now(self) -> datetime:
@@ -2708,6 +3140,10 @@ class CoreService:
         return {
             "no_complete_observation": "No complete observation exists for this exact scope.",
             "max_age_unconfigured": "No maximum age is configured for this scope.",
+            "no_max_age_guarantee": (
+                "The complete local observation has no configured age limit; "
+                "CURRENT does not guarantee a recent source read."
+            ),
             "latest_attempt_incomplete": "The latest observation of this scope was incomplete.",
             "current_coverage_unestablished": "Current complete coverage is not established.",
         }.get(code, "Freshness could not be fully established for this scope.")

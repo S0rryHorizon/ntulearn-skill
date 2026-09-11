@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -26,6 +27,7 @@ from ntulearn_skill.core.api import (
     CoreService,
     CourseFilter,
     CourseRef,
+    EventFilter,
     FreshnessRequirement,
     ResourceRef,
     SearchEntityKind,
@@ -42,9 +44,11 @@ from ntulearn_skill.events import (
     ClaimDecisionState,
     ClaimOrigin,
     ConflictState,
+    EventConfirmationBasisKind,
     EventConflict,
     EventRepository,
     EventResolutionState,
+    ManualFieldResolution,
 )
 from ntulearn_skill.extractors.classification import (
     ClassificationInput,
@@ -186,6 +190,167 @@ def test_course_provenance_uses_source_object_namespace_and_limit_is_partial(
     assert result.completeness is Coverage.PARTIAL
     assert not result.conclusive_empty
     assert any(warning.code == "result_limit_reached" for warning in result.warnings)
+    assert result.source_completeness is Coverage.COMPLETE
+    assert result.truncated and result.next_cursor is not None
+
+
+def test_course_pages_do_not_misreport_exact_limit_and_continue_equal_sort_values(
+    tmp_path: Path,
+) -> None:
+    database, paths, domain = _database(tmp_path)
+    for ordinal in range(3):
+        domain.put_course(
+            CourseId("synthetic", f"same-{ordinal}"),
+            code="PH0000",
+            title="Same synthetic title",
+        )
+    _record_complete(database, ScopeKey("synthetic", None, "courses"))
+    service = CoreService(database, runtime_paths=paths, now=lambda: NOW)
+
+    first = service.list_courses(CourseFilter(limit=2))
+    second = CoreService(database, runtime_paths=paths, now=lambda: NOW).list_courses(
+        CourseFilter(limit=2, cursor=first.next_cursor)
+    )
+
+    assert [item.course_id.value for item in first.items] == ["same-0", "same-1"]
+    assert [item.course_id.value for item in second.items] == ["same-2"]
+    assert len({item.local_key for item in first.items + second.items}) == 3
+    assert first.truncated and not second.truncated
+    assert second.next_cursor is None
+    assert not any(warning.code == "result_limit_reached" for warning in second.warnings)
+    assert len(first.provenance) == 2
+
+    exact_database, exact_paths, exact_domain = _database(tmp_path / "exact")
+    for ordinal in range(2):
+        exact_domain.put_course(
+            CourseId("synthetic", f"exact-{ordinal}"), code="PH0000", title="Same"
+        )
+    _record_complete(exact_database, ScopeKey("synthetic", None, "courses"))
+    exact = CoreService(exact_database, runtime_paths=exact_paths, now=lambda: NOW).list_courses(
+        CourseFilter(limit=2)
+    )
+    assert len(exact.items) == 2
+    assert not exact.truncated and exact.next_cursor is None
+    assert not any(warning.code == "result_limit_reached" for warning in exact.warnings)
+
+
+def test_cursor_binds_filters_and_rejects_local_changes(tmp_path: Path) -> None:
+    database, paths, domain = _database(tmp_path)
+    for ordinal in range(3):
+        domain.put_course(
+            CourseId("synthetic", f"course-{ordinal}"),
+            code=f"PH{ordinal:04d}",
+            title="Synthetic",
+        )
+    _record_complete(database, ScopeKey("synthetic", None, "courses"))
+    service = CoreService(database, runtime_paths=paths, now=lambda: NOW)
+    first = service.list_courses(CourseFilter(limit=1))
+    assert first.next_cursor is not None
+
+    rebound = service.list_courses(
+        CourseFilter(
+            availability=frozenset({Availability.ACTIVE}),
+            limit=1,
+            cursor=first.next_cursor,
+        )
+    )
+    assert rebound.errors[0].category is ErrorCategory.INVALID_REQUEST
+
+    domain.put_course(CourseId("synthetic", "course-new"), code="PH0000", title="Inserted")
+    changed = service.list_courses(CourseFilter(limit=1, cursor=first.next_cursor))
+    assert changed.errors[0].category is ErrorCategory.INVALID_REQUEST
+
+
+def test_terminal_page_rejects_change_between_read_and_cursor_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database, paths, domain = _database(tmp_path)
+    for ordinal in range(2):
+        domain.put_course(
+            CourseId("synthetic", f"race-{ordinal}"),
+            code=f"PH{ordinal:04d}",
+            title="Synthetic",
+        )
+    _record_complete(database, ScopeKey("synthetic", None, "courses"))
+    service = CoreService(database, runtime_paths=paths, now=lambda: NOW)
+    first = service.list_courses(CourseFilter(limit=1))
+    assert first.next_cursor is not None
+    original = service._load_courses
+
+    def mutate_after_read(filter: CourseFilter, offset: int = 0) -> object:
+        page = original(filter, offset)
+        domain.put_course(CourseId("synthetic", "race-inserted"), code="PH9999", title="Inserted")
+        return page
+
+    monkeypatch.setattr(service, "_load_courses", mutate_after_read)
+    terminal = service.list_courses(CourseFilter(limit=1, cursor=first.next_cursor))
+
+    assert terminal.errors[0].category is ErrorCategory.INVALID_REQUEST
+
+
+def test_search_uses_limit_plus_one_and_exposes_continuation(tmp_path: Path) -> None:
+    database, paths, domain = _database(tmp_path)
+    for ordinal in range(3):
+        domain.put_course(
+            CourseId("synthetic", f"search-{ordinal}"),
+            code=f"PH{ordinal:04d}",
+            title="Synthetic searchable course",
+        )
+    _record_complete(database, ScopeKey("synthetic", None, "courses"))
+    service = CoreService(database, runtime_paths=paths, now=lambda: NOW)
+    query = SearchQuery(
+        "searchable",
+        SearchFilters(entity_kinds=frozenset({SearchEntityKind.COURSE})),
+        limit=2,
+        neighbor_count=0,
+    )
+
+    first = service.search(query)
+    second = service.search(replace(query, cursor=first.next_cursor))
+
+    assert len(first.items) == 2 and first.truncated
+    assert len(second.items) == 1 and not second.truncated
+    assert len({item.search_document_key for item in first.items + second.items}) == 3
+    assert len(first.provenance) == 2
+    with pytest.raises(ValueError, match="consumed by CoreService"):
+        service.search_service.search(replace(query, cursor="synthetic-cursor"))
+
+
+def test_search_course_cursor_cannot_be_reused_by_the_general_search_operation(
+    tmp_path: Path,
+) -> None:
+    database, paths, domain = _database(tmp_path)
+    course = CourseId("synthetic", "search-course-operation")
+    record = domain.put_course(course, code="PH0000", title="Synthetic searchable course")
+    for ordinal in range(2):
+        domain.put_content_node(
+            ContentId("synthetic", f"search-content-{ordinal}"),
+            course_id=course,
+            handler_kind="item",
+            title=f"Synthetic searchable content {ordinal}",
+            position=ordinal,
+        )
+    _record_complete(database, ScopeKey("synthetic", None, "courses"))
+    service = CoreService(database, runtime_paths=paths, now=lambda: NOW)
+    query = SearchQuery(
+        "searchable",
+        SearchFilters(entity_kinds=frozenset({SearchEntityKind.CONTENT})),
+        limit=1,
+        neighbor_count=0,
+    )
+
+    first = service.search_course(CourseRef(local_key=record.key), query)
+    assert first.operation == "search_course"
+    assert first.next_cursor is not None
+
+    rebound = service.search(
+        replace(
+            query,
+            filters=replace(query.filters, course=course),
+            cursor=first.next_cursor,
+        )
+    )
+    assert rebound.errors[0].category is ErrorCategory.INVALID_REQUEST
 
 
 def test_stale_complete_scope_does_not_make_empty_result_conclusive(tmp_path: Path) -> None:
@@ -354,6 +519,81 @@ def test_unbound_related_change_keeps_upcoming_inconclusive(tmp_path: Path) -> N
     assert result.completeness is Coverage.PARTIAL
     assert not result.conclusive_empty
     assert any(warning.code == "unresolved_event_identity" for warning in result.warnings)
+
+
+def test_event_preview_separates_rule_basis_manual_confirmation_and_wording_conflicts(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path)
+    _assessment_with_due_alternatives(harness)
+    reconciled = harness.reconciler.reconcile_course(harness.first_course).events[0]
+    service = CoreService(harness.database)
+    result = service.get_events(EventFilter(course=CourseRef(remote_id=harness.first_course)))
+    preview = result.items[0]
+    assert preview.review is not None
+    assert preview.review.wording_conflicts
+    assert preview.review.fields_requiring_review
+    assert CandidateFieldName.LOCATION in preview.review.missing_fields
+    assert CandidateFieldName.LOCATION not in preview.review.missing_required_fields
+    assert set(preview.review.missing_required_fields) <= set(
+        preview.review.fields_requiring_review
+    )
+    assert all(
+        basis.kind is EventConfirmationBasisKind.DETERMINISTIC_RULE and not basis.manually_confirmed
+        for basis in preview.review.confirmation_basis
+    )
+
+    title = reconciled.field(CandidateFieldName.TITLE)
+    assert title is not None
+    resolved = service.resolve_event_candidate(
+        ManualFieldResolution(
+            reconciled.key,
+            CandidateFieldName.TITLE,
+            "Synthetic reviewer selected the source title.",
+            selected_claim_key=title.selected_claim_key,
+        )
+    ).items[0]
+    assert resolved.review is not None
+    title_basis = next(
+        basis
+        for basis in resolved.review.confirmation_basis
+        if basis.field_name is CandidateFieldName.TITLE
+    )
+    assert title_basis.kind is EventConfirmationBasisKind.MANUAL_RESOLUTION
+    assert title_basis.manually_confirmed
+    assert title_basis.detail == "Synthetic reviewer selected the source title."
+
+
+def test_event_page_rejects_a_manual_change_between_item_and_review_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = _harness(tmp_path)
+    _assessment_with_due_alternatives(harness)
+    event = harness.reconciler.reconcile_course(harness.first_course).events[0]
+    title = event.field(CandidateFieldName.TITLE)
+    assert title is not None
+    service = CoreService(harness.database)
+    original = service._with_event_reviews
+
+    def resolve_after_items_loaded(
+        events: tuple[CanonicalEvent, ...],
+    ) -> tuple[CanonicalEvent, ...]:
+        service.events.resolve_field(
+            ManualFieldResolution(
+                event.key,
+                CandidateFieldName.TITLE,
+                "Synthetic concurrent reviewer selected the source title.",
+                selected_claim_key=title.selected_claim_key,
+            )
+        )
+        return original(events)
+
+    monkeypatch.setattr(service, "_with_event_reviews", resolve_after_items_loaded)
+
+    result = service.get_events(EventFilter(course=CourseRef(remote_id=harness.first_course)))
+
+    assert result.items == ()
+    assert result.errors[0].category is ErrorCategory.INVALID_REQUEST
 
 
 def test_week_only_event_is_retained_with_partial_window_coverage(tmp_path: Path) -> None:

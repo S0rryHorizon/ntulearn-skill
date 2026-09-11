@@ -49,6 +49,10 @@ ntulearn resource RESOURCE_KEY
 
 [带类型的 capture 契约（英文）](browser-capture-contract.md)是宿主采集与常规 Core 之间的私人集成边界。它携带范围受限的观察记录、来源路径、采集时间和下载文件，主要供维护者及宿主集成代码使用；日常用户应使用浏览器 Skill。
 
+宿主集成代码必须把 capture 目录创建为仅所有者可访问的 `0700` 目录，并把 manifest 创建为 `0600` 的普通文件。集成代码应在保存 capture 内容前调用 `prepare_browser_capture_directory`，并用 `write_browser_capture_manifest` 写入最终 JSON；不得先用默认权限写入 manifest，再事后 chmod。导入器会拒绝符号链接、group/other 权限位以及过大的 manifest，并以不回显 capture 路径或正文的固定提示说明修复要求。
+
+`UNKNOWN`：尚未在每一种受支持浏览器宿主上验证原生下载路径及其权限行为。宿主集成必须让生成的 manifest 通过常规 CLI 导入；如果无法安全创建，应报告该宿主的具体能力缺口。
+
 Capture 代表其原始观察时间。重放它不能证明进行了新的网络读取。有限遍历仍是 PARTIAL，遗漏资源不构成删除证据。根据未变化的元数据复用资源，仅是一种内容未变的假设；哈希验证需要实际下载。绝不通过重命名旧 capture 或重新标记旧字节来制造新鲜证据。
 
 如果 capture 过期，较早的元数据可能仍可导入，但资源流式读取会明确失败。缓存资料仍可通过本地查询访问。如果可见页面或工具拒绝某条访问路径，应停止该路径并报告缺口；不要改用终端请求、复制凭据或绕过浏览器控件。

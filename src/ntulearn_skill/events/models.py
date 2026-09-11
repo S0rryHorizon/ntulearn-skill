@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import TypeAlias
@@ -109,6 +109,11 @@ class ReconciliationDecisionResult(StrEnum):
     UNRESOLVED = "UNRESOLVED"
     RELATED_CHANGE = "RELATED_CHANGE"
     MANUAL_RETAINED = "MANUAL_RETAINED"
+
+
+class EventConfirmationBasisKind(StrEnum):
+    DETERMINISTIC_RULE = "DETERMINISTIC_RULE"
+    MANUAL_RESOLUTION = "MANUAL_RESOLUTION"
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +236,35 @@ class EventConflict:
 
 
 @dataclass(frozen=True, slots=True)
+class EventWordingConflict:
+    field_name: CandidateFieldName
+    selected_claim_key: int | None
+    selected_original_text: str | None
+    alternative_original_texts: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class EventConfirmationBasis:
+    field_name: CandidateFieldName
+    selected_claim_key: int
+    kind: EventConfirmationBasisKind
+    detail: str
+    manually_confirmed: bool
+    manual_resolution_key: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EventReview:
+    identity_requires_review: bool
+    fields_requiring_review: tuple[CandidateFieldName, ...]
+    missing_fields: tuple[CandidateFieldName, ...]
+    wording_conflicts: tuple[EventWordingConflict, ...]
+    confirmation_basis: tuple[EventConfirmationBasis, ...]
+    required_fields: tuple[CandidateFieldName, ...] = ()
+    missing_required_fields: tuple[CandidateFieldName, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class CanonicalEvent:
     key: int
     stable_id: str
@@ -249,6 +283,7 @@ class CanonicalEvent:
     sources: tuple[EventSource, ...]
     claims: tuple[Claim, ...]
     conflicts: tuple[EventConflict, ...]
+    review: EventReview | None = field(default=None, compare=False)
 
     def field(self, name: CandidateFieldName) -> EventProjection | None:
         return next((field for field in self.projections if field.field_name is name), None)

@@ -88,6 +88,18 @@ boundary between host collection and the normal Core. It carries bounded observa
 source paths, capture times and downloaded files. It is mainly relevant to maintainers
 and host integration code; everyday users should use the browser Skill.
 
+Host integration code creates the capture directory with owner-only `0700` permissions
+and the manifest as an owner-only regular file with `0600` permissions. The importer
+rejects symlinks, group/other access and oversized manifests. See the contract for the
+exact creation boundary. Integrations call `prepare_browser_capture_directory` before
+saving capture content and `write_browser_capture_manifest` for the final JSON; they do
+not write a default-permission manifest and chmod it afterward.
+
+`UNKNOWN`: the exact native download path and permission behavior has not been validated
+on every supported browser host. A host integration must run the resulting manifest
+through the normal CLI import and report a host-specific gap if secure creation is not
+available.
+
 A capture represents its original observation time. Replaying it does not prove a new
 network read. Limited traversal remains PARTIAL, and omitted resources are not evidence
 of deletion. Reuse based on unchanged metadata is only an unchanged assumption; hash

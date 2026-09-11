@@ -29,6 +29,7 @@ class FreshnessStatus(StrEnum):
 class FreshnessWarning(StrEnum):
     NO_COMPLETE_OBSERVATION = "no_complete_observation"
     MAX_AGE_UNCONFIGURED = "max_age_unconfigured"
+    NO_MAX_AGE_GUARANTEE = "no_max_age_guarantee"
     LATEST_ATTEMPT_INCOMPLETE = "latest_attempt_incomplete"
     CURRENT_COVERAGE_UNESTABLISHED = "current_coverage_unestablished"
     HISTORICAL_LOCAL_ONLY = "historical_local_only"
@@ -82,6 +83,11 @@ class FreshnessDecision:
     satisfied: bool
     should_refresh: bool
     warning_codes: tuple[FreshnessWarning, ...] = ()
+    successful_observation_at: datetime | None = None
+    successful_observation_age: timedelta | None = None
+    complete_snapshot_at: datetime | None = None
+    complete_snapshot_age: timedelta | None = None
+    ttl_configured: bool = False
 
 
 def _aware_utc(value: datetime) -> datetime:
@@ -99,8 +105,18 @@ def evaluate_freshness(
     """Evaluate an exact scope without accessing a source or mutating state."""
 
     current_time = _aware_utc(now)
+    # ``as_of``/``age`` retain the original complete-snapshot meaning for API
+    # compatibility.  Successful observations are reported independently so a
+    # failed attempt cannot masquerade as a newer successful read; a successful
+    # partial attempt advances only the successful-observation marker.
     as_of = None if state is None else state.last_complete_at
-    age = None if state is None else state.age_at(current_time)
+    age = None if as_of is None else max(current_time - as_of, timedelta())
+    successful_observation_at = None if state is None else state.last_success_at
+    successful_observation_age = (
+        None
+        if successful_observation_at is None
+        else max(current_time - successful_observation_at, timedelta())
+    )
     warning_codes: list[FreshnessWarning] = []
     if age is None:
         warning_codes.append(FreshnessWarning.NO_COMPLETE_OBSERVATION)
@@ -111,6 +127,8 @@ def evaluate_freshness(
     if requirement.mode is FreshnessMode.REFRESH_IF_STALE:
         if max_age is None:
             warning_codes.append(FreshnessWarning.MAX_AGE_UNCONFIGURED)
+    if max_age is None:
+        warning_codes.append(FreshnessWarning.NO_MAX_AGE_GUARANTEE)
 
     complete_known = age is not None
     if age is not None and max_age is not None:
@@ -175,6 +193,11 @@ def evaluate_freshness(
         satisfied=satisfied,
         should_refresh=should_refresh,
         warning_codes=tuple(warning_codes),
+        successful_observation_at=successful_observation_at,
+        successful_observation_age=successful_observation_age,
+        complete_snapshot_at=as_of,
+        complete_snapshot_age=age,
+        ttl_configured=max_age is not None,
     )
 
 

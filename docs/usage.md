@@ -140,11 +140,52 @@ is then retried once. Without an engine, freshness requirements that need a remo
 return a typed safe error or an unsatisfied result. The core does not silently create a
 browser session.
 
+`freshness[].successful_observation_at` reports the most recent successful source
+observation, including a successful partial observation. `complete_snapshot_at` retains
+the last complete-scope marker. `ttl_configured`, `max_age_seconds` and
+`source_coverage` are separate: `CURRENT` without a configured TTL preserves the legacy
+complete-snapshot status but does not promise a recent source read. Every scope without
+a configured TTL carries `no_max_age_guarantee`, including `UNKNOWN` scopes that have no
+complete snapshot. `freshness_satisfied` answers only whether the requested policy
+was met. A cache-only request can therefore report `freshness_satisfied: true` while a
+scope remains `STALE` or `UNKNOWN`; it never means that the local evidence is the latest
+source state.
+
+### Local result pagination
+
+Courses, materials, recent material changes, search, announcements, assessments,
+events and upcoming-event commands accept `--limit 1..100` and an opaque `--cursor`.
+A query fetches one extra row, so exactly `limit` matches do not produce a continuation
+warning. When more rows exist, `truncated` is true and `next_cursor` continues the same
+operation, filters and page size. The opaque cursor also binds a hashed private-runtime
+identity and a digest of SQLite's serialized snapshot; it does not contain the runtime
+path. Normal WAL checkpointing or sidecar removal without a logical change preserves the
+cursor. Detected logical changes between pages or during construction of a page invalidate
+it, including inserted, deleted or reordered rows. Restart from the first page after an
+invalid cursor. This optimistic validation is not cross-call snapshot isolation, so callers
+must not continue after an error or claim guarantees for arbitrary concurrent changes. It
+does not defend against an adversarial database replacement or a transient ABA sequence that
+restores the same serialized state; private-runtime permissions remain the trust boundary.
+
+Relative CLI windows such as `upcoming --days 7`, `events --next 2w` and
+`recent-materials --days 14` move with the clock and cannot be continued safely. For a
+second page, reuse the exact `coverage[].window_since` and `window_until` values from the
+first response with `--window-since ISO_TIMESTAMP --window-until ISO_TIMESTAMP`, together
+with `--cursor`. The CLI rejects a cursor paired only with a rolling window.
+
 ### Result meaning and exit codes
 
 `--json` emits schema version `1.0`. The envelope contains `operation`, `items`,
-`completeness`, `as_of`, `freshness`, `coverage`, `conflicts`, `provenance`, `warnings`,
+`completeness`, `source_completeness`, `freshness_satisfied`, `truncated`,
+`next_cursor`, `as_of`, `freshness`, `coverage`, `conflicts`, `provenance`, `warnings`,
 `errors`, `refresh_attempted` and `local_reads`, plus the CLI `command` field.
+`completeness` retains the compatible aggregate meaning and can become `PARTIAL` for a
+truncated page or stale freshness. `source_completeness`, `freshness_satisfied` and
+`truncated` let new callers assess those dimensions independently. Despite its compatible
+name, `source_completeness` aggregates all relevant `coverage[]` layers for the operation,
+which may include remote-scope coverage together with local parse, event-derivation or
+temporal-projection coverage. It excludes local page truncation. Human output prints these
+three dimensions and the opaque `next_cursor` separately.
 
 | Exit | Meaning |
 | ---: | --- |
@@ -163,6 +204,26 @@ coverage impact. They intentionally omit supplied invalid values, raw exception 
 headers, payloads, signed URLs and private document excerpts.
 
 ### Local event decisions
+
+Event previews expose `review.fields_requiring_review`, `required_fields`,
+`missing_required_fields`, `missing_fields`, `wording_conflicts` and per-field
+`confirmation_basis`. `missing_fields` lists absent canonical projection fields,
+including optional or inapplicable fields such as location, end time or status;
+`missing_required_fields` is the subset that blocks a complete preview.
+A
+`DETERMINISTIC_RULE` basis and source provenance are not human confirmation.
+`MANUAL_RESOLUTION` appears only when an active recorded manual decision selected the
+projected claim or local value, and carries that decision's reason.
+
+A later incompatible current source claim reopens the field for deterministic reconciliation;
+a selected source claim also stops being current when a successful newer extraction retires
+its candidate. In both cases the prior manual row remains as inactive audit history. A later
+compatible corroboration does not invalidate an otherwise current manual confirmation.
+
+Deterministic rule revision 7 narrowly filters non-assessment uses such as “scientific test”
+or an imperative “test the circuit”, while retaining explicit numbered student wording such
+as “Unit Test 1”. These are bounded synthetic regressions, not evidence of an overall increase
+in event extraction accuracy; source review remains required.
 
 Manual resolution changes only the private local event projection and retains its audit
 record. Use local event, claim and source keys from query results:

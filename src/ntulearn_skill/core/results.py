@@ -95,6 +95,14 @@ class FreshnessView:
     age_seconds: int | None
     satisfied: bool
     warning_codes: tuple[str, ...] = ()
+    successful_observation_at: datetime | None = None
+    successful_observation_age_seconds: int | None = None
+    complete_snapshot_at: datetime | None = None
+    complete_snapshot_age_seconds: int | None = None
+    max_age_seconds: int | None = None
+    ttl_configured: bool = False
+    source_coverage: Coverage | None = None
+    last_attempt_outcome: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +184,10 @@ class ResultEnvelope(Generic[T]):
     refresh_attempted: bool = False
     local_reads: int = 1
     schema_version: str = SCHEMA_VERSION
+    next_cursor: str | None = None
+    truncated: bool = False
+    source_completeness: Coverage | None = None
+    freshness_satisfied: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.operation.strip():
@@ -184,6 +196,15 @@ class ResultEnvelope(Generic[T]):
             raise ValueError("unsupported result schema version")
         if self.local_reads < 0 or self.local_reads > 2:
             raise ValueError("local read count must be between zero and two")
+        if self.next_cursor is not None and (
+            not isinstance(self.next_cursor, str)
+            or not self.next_cursor
+            or not self.next_cursor.isascii()
+            or len(self.next_cursor) > 2_048
+        ):
+            raise ValueError("next cursor must be bounded ASCII text")
+        if self.truncated != (self.next_cursor is not None):
+            raise ValueError("truncated results require exactly one continuation cursor")
         for name in (
             "items",
             "provenance",

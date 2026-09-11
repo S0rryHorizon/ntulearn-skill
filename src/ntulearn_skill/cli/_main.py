@@ -16,7 +16,13 @@ from ntulearn_skill.cli._presentation import (
     render_json,
     usage_error_envelope,
 )
-from ntulearn_skill.client import SourceError, safe_source_error_category
+from ntulearn_skill.client import (
+    BROWSER_CAPTURE_ERROR_MESSAGE,
+    BrowserCaptureManifestError,
+    SourceError,
+    TimeWindow,
+    safe_source_error_category,
+)
 from ntulearn_skill.core import Coverage, TemporalPrecision
 from ntulearn_skill.core.api import CoreService, CourseRef, ManualResolution, ResourceRef
 from ntulearn_skill.core.results import ErrorCategory, ResultEnvelope, SafeError
@@ -92,10 +98,27 @@ def _duration(text: str) -> timedelta:
     return duration
 
 
+def _absolute_window(args: argparse.Namespace) -> TimeWindow | None:
+    since_text = getattr(args, "window_since", None)
+    until_text = getattr(args, "window_until", None)
+    if (since_text is None) != (until_text is None):
+        raise UsageError("invalid command arguments")
+    if since_text is None:
+        return None
+    if not isinstance(since_text, str) or not isinstance(until_text, str):
+        raise UsageError("invalid command arguments")
+    try:
+        since = datetime.fromisoformat(since_text)
+        until = datetime.fromisoformat(until_text)
+        return TimeWindow(since, until)
+    except (TypeError, ValueError):
+        raise UsageError("invalid command arguments") from None
+
+
 def _search_query(args: argparse.Namespace) -> SearchQuery:
     from ntulearn_skill.search import SearchFilters
 
-    return SearchQuery(args.query, SearchFilters(), args.limit, args.neighbors)
+    return SearchQuery(args.query, SearchFilters(), args.limit, args.neighbors, args.cursor)
 
 
 def _invalid_json_constant(_value: str) -> NoReturn:
@@ -141,8 +164,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         _freshness(args)
     if args.command == "search":
         _search_query(args)
-    elif args.command == "events" and args.next_window is not None:
-        _duration(args.next_window)
+    elif args.command in {"events", "upcoming", "recent-materials"}:
+        fixed = _absolute_window(args)
+        if fixed is None and getattr(args, "cursor", None) is not None:
+            raise UsageError("invalid command arguments")
+        if args.command == "events" and args.next_window is not None:
+            _duration(args.next_window)
     elif args.command in {"manual-resolution", "manualresolution"}:
         _manual_decision(args)
 
@@ -153,7 +180,6 @@ def _dispatch(
     *,
     now: Callable[[], datetime],
 ) -> object:
-    from ntulearn_skill.client import TimeWindow
     from ntulearn_skill.core.api import (
         AnnouncementFilter,
         AssessmentFilter,
@@ -170,19 +196,29 @@ def _dispatch(
 
     command = args.command
     if command == "courses":
-        return service.list_courses(CourseFilter(), _freshness(args))
+        return service.list_courses(
+            CourseFilter(limit=args.limit, cursor=args.cursor), _freshness(args)
+        )
     if command == "materials":
-        return service.list_materials(_course(args.course_key), MaterialFilter(), _freshness(args))
+        return service.list_materials(
+            _course(args.course_key),
+            MaterialFilter(limit=args.limit, cursor=args.cursor),
+            _freshness(args),
+        )
     if command == "library-status":
         course = None if args.course_key is None else _course(args.course_key)
         return service.get_library_status(course, _freshness(args))
     if command == "recent-materials":
-        until = now().astimezone(UTC)
+        window = _absolute_window(args)
+        if window is None:
+            until = now().astimezone(UTC)
+            window = TimeWindow(until - timedelta(days=args.days), until)
         return service.get_recent_material_changes(
             _course(args.course_key),
-            TimeWindow(until - timedelta(days=args.days), until),
+            window,
             _freshness(args),
             limit=args.limit,
+            cursor=args.cursor,
         )
     if command == "search":
         query = _search_query(args)
@@ -191,26 +227,41 @@ def _dispatch(
         return service.search_course(_course(args.course_key), query, _freshness(args))
     if command == "announcements":
         return service.get_announcements(
-            _course(args.course_key), AnnouncementFilter(), _freshness(args)
+            _course(args.course_key),
+            AnnouncementFilter(limit=args.limit, cursor=args.cursor),
+            _freshness(args),
         )
     if command == "assessments":
         return service.get_assessments(
-            _course(args.course_key), AssessmentFilter(), _freshness(args)
+            _course(args.course_key),
+            AssessmentFilter(limit=args.limit, cursor=args.cursor),
+            _freshness(args),
         )
-    if command == "events" and args.next_window is None:
+    if command == "events" and args.next_window is None and _absolute_window(args) is None:
         return service.get_events(
-            EventFilter(course=None if args.course_key is None else _course(args.course_key)),
+            EventFilter(
+                course=None if args.course_key is None else _course(args.course_key),
+                limit=args.limit,
+                cursor=args.cursor,
+            ),
             _freshness(args),
         )
     if command in {"events", "upcoming"}:
-        duration = _duration(args.next_window) if command == "events" else timedelta(days=args.days)
-        if duration <= timedelta():
-            raise UsageError("invalid command arguments")
-        since = now().astimezone(UTC)
+        window = _absolute_window(args)
+        if window is None:
+            duration = (
+                _duration(args.next_window) if command == "events" else timedelta(days=args.days)
+            )
+            if duration <= timedelta():
+                raise UsageError("invalid command arguments")
+            since = now().astimezone(UTC)
+            window = TimeWindow(since, since + duration)
         return service.get_upcoming_events(
-            TimeWindow(since, since + duration),
+            window,
             None if args.course_key is None else _course(args.course_key),
             _freshness(args),
+            limit=args.limit,
+            cursor=args.cursor,
         )
     if command == "source":
         reference = SourceReference(SourceReferenceKind(args.kind), args.key)
@@ -251,14 +302,19 @@ def _dispatch(
     raise UsageError("invalid command arguments")
 
 
-def _failure_result(operation: str, category: ErrorCategory, code: str) -> ResultEnvelope[object]:
+def _failure_result(
+    operation: str,
+    category: ErrorCategory,
+    code: str,
+    message: str = "the command could not be completed safely",
+) -> ResultEnvelope[object]:
     return ResultEnvelope(
         operation,
         errors=(
             SafeError(
                 category,
                 code,
-                "the command could not be completed safely",
+                message,
                 operation,
                 "local_runtime",
                 False,
@@ -372,7 +428,12 @@ def run(
             "session_expired": ErrorCategory.SESSION_EXPIRED,
             "unsupported_capability": ErrorCategory.CAPABILITY_UNSUPPORTED,
         }.get(category_name, ErrorCategory.SOURCE_UNAVAILABLE)
-        result = _failure_result("cli.dispatch", category, category_name)
+        message = (
+            BROWSER_CAPTURE_ERROR_MESSAGE
+            if isinstance(error, BrowserCaptureManifestError)
+            else "the command could not be completed safely"
+        )
+        result = _failure_result("cli.dispatch", category, category_name, message)
         payload = json_envelope(result, command=command)
     except Exception:
         result = _failure_result(

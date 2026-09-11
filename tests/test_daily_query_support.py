@@ -118,6 +118,34 @@ def test_recent_changes_materials_require_a_changed_observation(tmp_path: Path) 
     assert source.items[0].observation["sanitized_metadata"] == {"revision": "two"}
 
 
+def test_recent_material_changes_exposes_stable_continuation(tmp_path: Path) -> None:
+    _root, service, course_key = _runtime(tmp_path)
+    resources = ResourceRepository(service.database)
+    for ordinal, hours in enumerate((12, 6), start=2):
+        resources.observe(
+            AttachmentId("synthetic", f"resource-{ordinal}"),
+            content_id=ContentId("synthetic", "content-one"),
+            sync_run_key=_sync_run(service.database, NOW - timedelta(hours=hours)),
+            display_title=f"Invented material {ordinal}",
+            original_filename=f"invented-{ordinal}.pdf",
+            sanitized_metadata={"revision": "one"},
+            observed_at=NOW - timedelta(hours=hours),
+        )
+    window = TimeWindow(NOW - timedelta(days=7), NOW)
+
+    first = service.get_recent_material_changes(CourseRef(local_key=course_key), window, limit=2)
+    second = CoreService(
+        service.database, runtime_paths=service.runtime_paths, now=lambda: NOW
+    ).get_recent_material_changes(
+        CourseRef(local_key=course_key), window, limit=2, cursor=first.next_cursor
+    )
+
+    assert len(first.items) == 2 and first.truncated
+    assert len(second.items) == 1 and not second.truncated
+    assert len({item.observation_key for item in first.items + second.items}) == 3
+    assert len(first.provenance) == 2
+
+
 def test_incomplete_observation_is_not_a_material_update(tmp_path: Path) -> None:
     root, service, course_key = _runtime(tmp_path)
     repository = ResourceRepository(service.database)

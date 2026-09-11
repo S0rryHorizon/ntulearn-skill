@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from reportlab.pdfgen import canvas
 
 from ntulearn_skill.cli import run
 from ntulearn_skill.client import (
+    BROWSER_CAPTURE_ERROR_MESSAGE,
     BrowserCaptureBundle,
     BrowserCaptureProvider,
     BrowserCaptureSessionProvider,
@@ -18,17 +20,19 @@ from ntulearn_skill.client import (
     SessionExpired,
     SourceProtocolError,
     SourceUnavailable,
+    write_browser_capture_manifest,
 )
+from ntulearn_skill.client.browser_capture import MAX_MANIFEST_BYTES
 from ntulearn_skill.core import AttachmentId, ContentId, TemporalPrecision
 from ntulearn_skill.storage import Database
 from tests.browser_capture_fixture import synthetic_manifest, write_synthetic_browser_bundle
 
 
 def _write_manifest(root: Path, payload: dict[str, object]) -> Path:
-    root.mkdir(parents=True, exist_ok=True)
     manifest = root / "manifest.json"
-    manifest.write_text(json.dumps(payload), encoding="utf-8")
-    return manifest
+    if manifest.exists():
+        manifest.unlink()
+    return write_browser_capture_manifest(manifest, payload)
 
 
 def _invoke(runtime: Path, manifest: Path, *arguments: str) -> tuple[int, dict[str, object]]:
@@ -97,6 +101,164 @@ def test_manifest_maps_visible_fields_and_derives_unobserved_namespaces(tmp_path
     assert assessment.due_at.instant == datetime(2036, 9, 4, 15, 59, tzinfo=UTC)
     assert bundle.announcements[0].published_at is not None
     assert bundle.announcements[0].published_at.precision is TemporalPrecision.UNKNOWN
+
+
+def test_manifest_writer_creates_private_files_with_permissive_umask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_post_write_chmod(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("secure capture creation must not rely on chmod")
+
+    monkeypatch.setattr(os, "chmod", reject_post_write_chmod)
+    previous_umask = os.umask(0)
+    try:
+        manifest = write_synthetic_browser_bundle(tmp_path / "bundle", datetime.now(UTC))
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(manifest.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(manifest.stat().st_mode) == 0o600
+    assert BrowserCaptureBundle.load(manifest).capture_id == "synthetic-capture-0001"
+
+
+def test_manifest_writer_rejects_wide_existing_directory_without_changing_it(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "wide-bundle"
+    root.mkdir(mode=0o750)
+
+    with pytest.raises(SourceProtocolError, match="mode 0700"):
+        write_browser_capture_manifest(
+            root / "manifest.json", synthetic_manifest(datetime.now(UTC))
+        )
+
+    assert stat.S_IMODE(root.stat().st_mode) == 0o750
+    assert not (root / "manifest.json").exists()
+
+
+def test_manifest_rejects_symlink_without_echoing_private_target(tmp_path: Path) -> None:
+    root = tmp_path / "bundle"
+    root.mkdir(mode=0o700)
+    private_marker = "private-symlink-target"
+    target = tmp_path / f"{private_marker}.json"
+    target.write_text("{}", encoding="utf-8")
+    target.chmod(0o600)
+    manifest = root / "manifest.json"
+    manifest.symlink_to(target)
+
+    with pytest.raises(SourceProtocolError) as raised:
+        BrowserCaptureBundle.load(manifest)
+
+    assert private_marker not in str(raised.value)
+
+
+def test_manifest_rejects_symlinked_capture_directory(tmp_path: Path) -> None:
+    real_root = tmp_path / "real-bundle"
+    write_synthetic_browser_bundle(real_root, datetime.now(UTC))
+    linked_root = tmp_path / "linked-bundle"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    with pytest.raises(SourceProtocolError, match="supported shape"):
+        BrowserCaptureBundle.load(linked_root / "manifest.json")
+
+
+def test_manifest_rejects_non_regular_file(tmp_path: Path) -> None:
+    root = tmp_path / "bundle"
+    root.mkdir(mode=0o700)
+    manifest = root / "manifest.json"
+    manifest.mkdir(mode=0o700)
+
+    with pytest.raises(SourceProtocolError, match="supported shape"):
+        BrowserCaptureBundle.load(manifest)
+
+
+@pytest.mark.parametrize(("directory_mode", "manifest_mode"), [(0o750, 0o600), (0o700, 0o640)])
+def test_manifest_rejects_non_owner_only_permissions(
+    tmp_path: Path, directory_mode: int, manifest_mode: int
+) -> None:
+    manifest = write_synthetic_browser_bundle(tmp_path / "bundle", datetime.now(UTC))
+    manifest.parent.chmod(directory_mode)
+    manifest.chmod(manifest_mode)
+
+    with pytest.raises(SourceProtocolError, match="supported shape"):
+        BrowserCaptureBundle.load(manifest)
+
+
+def test_cli_permission_failure_is_actionable_without_echoing_capture_path(tmp_path: Path) -> None:
+    private_marker = "private-permission-marker"
+    manifest = write_synthetic_browser_bundle(tmp_path / private_marker, datetime.now(UTC))
+    manifest.chmod(0o644)
+
+    code, result = _invoke(tmp_path / "runtime", manifest, "sync")
+
+    assert code == 1
+    assert result["errors"][0]["code"] == "source_protocol_error"  # type: ignore[index]
+    assert result["errors"][0]["message"] == BROWSER_CAPTURE_ERROR_MESSAGE  # type: ignore[index]
+    assert private_marker not in json.dumps(result)
+
+
+def test_manifest_rejects_content_above_byte_limit(tmp_path: Path) -> None:
+    root = tmp_path / "bundle"
+    root.mkdir(mode=0o700)
+    manifest = root / "manifest.json"
+    manifest.write_bytes(b" " * (MAX_MANIFEST_BYTES + 1))
+    manifest.chmod(0o600)
+
+    with pytest.raises(SourceProtocolError, match="supported shape"):
+        BrowserCaptureBundle.load(manifest)
+
+
+def test_manifest_rejects_growth_beyond_limit_after_fstat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = write_synthetic_browser_bundle(tmp_path / "bundle", datetime.now(UTC))
+    original_fstat = os.fstat
+    grew = False
+
+    def grow_after_manifest_fstat(descriptor: int) -> os.stat_result:
+        nonlocal grew
+        metadata = original_fstat(descriptor)
+        if stat.S_ISREG(metadata.st_mode) and not grew:
+            with manifest.open("ab") as stream:
+                stream.write(b" " * (MAX_MANIFEST_BYTES + 1))
+            grew = True
+        return metadata
+
+    monkeypatch.setattr(os, "fstat", grow_after_manifest_fstat)
+
+    with pytest.raises(SourceProtocolError, match="supported shape"):
+        BrowserCaptureBundle.load(manifest)
+
+    assert grew
+
+
+def test_manifest_reads_open_descriptor_when_path_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured_at = datetime.now(UTC)
+    manifest = write_synthetic_browser_bundle(tmp_path / "bundle", captured_at)
+    replacement_payload = synthetic_manifest(captured_at)
+    replacement_payload["capture_id"] = "replacement-capture"
+    replacement = manifest.parent / "replacement.json"
+    write_browser_capture_manifest(replacement, replacement_payload)
+    original_fstat = os.fstat
+    replaced = False
+
+    def replace_after_manifest_fstat(descriptor: int) -> os.stat_result:
+        nonlocal replaced
+        metadata = original_fstat(descriptor)
+        if stat.S_ISREG(metadata.st_mode) and not replaced:
+            os.replace(replacement, manifest)
+            replaced = True
+        return metadata
+
+    monkeypatch.setattr(os, "fstat", replace_after_manifest_fstat)
+
+    bundle = BrowserCaptureBundle.load(manifest)
+
+    assert replaced
+    assert bundle.capture_id == "synthetic-capture-0001"
+    assert json.loads(manifest.read_text(encoding="utf-8"))["capture_id"] == "replacement-capture"
 
 
 @pytest.mark.parametrize(
@@ -316,6 +478,13 @@ def test_cli_sync_uses_capture_through_existing_pipeline_and_replay_is_idempoten
             ).fetchone()[0]
         )
         assessment_count = int(connection.execute("SELECT COUNT(*) FROM assessment").fetchone()[0])
+        freshness_before = tuple(
+            tuple(row)
+            for row in connection.execute(
+                """SELECT data_kind, last_success_at, last_complete_at
+                FROM sync_state WHERE window_key = '' ORDER BY data_kind"""
+            )
+        )
     assert before["resource_version"] == 1
     assert request["capture_id"] == "synthetic-capture-0001"
     assert request["capture_content_source_path"].endswith("/outline")
@@ -343,9 +512,17 @@ def test_cli_sync_uses_capture_through_existing_pipeline_and_replay_is_idempoten
             """SELECT fetch_decision, policy_reason
             FROM resource_fetch_receipt ORDER BY fetch_receipt_key DESC LIMIT 1"""
         ).fetchone()
+        freshness_after = tuple(
+            tuple(row)
+            for row in connection.execute(
+                """SELECT data_kind, last_success_at, last_complete_at
+                FROM sync_state WHERE window_key = '' ORDER BY data_kind"""
+            )
+        )
     assert after == before
     assert verified_times == {captured_at.isoformat(timespec="microseconds")}
     assert tuple(replay_receipt) == ("NOT_NEEDED", "within_verification_interval")
+    assert freshness_after == freshness_before
     assert any(
         warning["code"] == "capture_replay_assumed_not_reverified" for warning in second["warnings"]
     )

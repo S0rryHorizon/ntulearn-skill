@@ -74,6 +74,25 @@ def _brief(value: object) -> str:
 def render_human(payload: Mapping[str, object]) -> str:
     completeness = str(payload.get("completeness", "FAILED")).upper()
     lines = [f"Completeness: {completeness}"]
+    source_completeness = payload.get("source_completeness")
+    lines.append(
+        "Source completeness: "
+        + ("unknown" if source_completeness is None else str(source_completeness).upper())
+    )
+    freshness_satisfied = payload.get("freshness_satisfied")
+    lines.append(
+        "Freshness policy satisfied: "
+        + (
+            "unknown"
+            if freshness_satisfied is None
+            else "yes"
+            if freshness_satisfied is True
+            else "no"
+        )
+    )
+    lines.append(f"Truncated: {'yes' if payload.get('truncated') is True else 'no'}")
+    next_cursor = payload.get("next_cursor")
+    lines.append(f"Next cursor: {next_cursor if next_cursor is not None else 'none'}")
     as_of = payload.get("as_of")
     lines.append(f"As of: {as_of if as_of is not None else 'unknown'}")
     freshness = payload.get("freshness")

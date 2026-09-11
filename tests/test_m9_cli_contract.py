@@ -120,6 +120,110 @@ def test_commands_delegate_once_to_the_stable_core_api(argv: list[str], method: 
     assert [call[0] for call in service.calls] == [method]
 
 
+def test_cli_forwards_bounded_list_and_search_continuations() -> None:
+    service = _Service(_result())
+
+    assert (
+        run(
+            ["courses", "--limit", "2", "--cursor", "synthetic-cursor"],
+            service=service,
+            stdout=io.StringIO(),
+        )
+        == EXIT_COMPLETE
+    )
+    course_filter = service.calls[0][1][0]
+    assert course_filter.limit == 2
+    assert course_filter.cursor == "synthetic-cursor"
+
+    service.calls.clear()
+    assert (
+        run(
+            [
+                "search",
+                "synthetic query",
+                "--limit",
+                "3",
+                "--cursor",
+                "synthetic-search-cursor",
+            ],
+            service=service,
+            stdout=io.StringIO(),
+        )
+        == EXIT_COMPLETE
+    )
+    search_query = service.calls[0][1][0]
+    assert search_query.limit == 3
+    assert search_query.cursor == "synthetic-search-cursor"
+
+
+def test_cli_continuation_uses_explicit_window_across_different_clock_values() -> None:
+    service = _Service(_result())
+    window_arguments = [
+        "--window-since",
+        "2035-01-02T00:00:00+00:00",
+        "--window-until",
+        "2035-01-09T00:00:00+00:00",
+    ]
+    assert (
+        run(
+            ["upcoming", *window_arguments],
+            service=service,
+            stdout=io.StringIO(),
+            now=lambda: NOW,
+        )
+        == EXIT_COMPLETE
+    )
+    assert (
+        run(
+            ["upcoming", *window_arguments, "--cursor", "synthetic-cursor"],
+            service=service,
+            stdout=io.StringIO(),
+            now=lambda: NOW + timedelta(days=1),
+        )
+        == EXIT_COMPLETE
+    )
+    assert service.calls[0][1][0] == service.calls[1][1][0]
+    assert service.calls[1][2]["cursor"] == "synthetic-cursor"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["upcoming", "--cursor", "synthetic-cursor"],
+        ["events", "--next", "7d", "--cursor", "synthetic-cursor"],
+        ["recent-materials", "1", "--cursor", "synthetic-cursor"],
+    ],
+)
+def test_cli_rejects_cursor_with_a_rolling_window(arguments: list[str]) -> None:
+    service = _Service(_result())
+    code = run(
+        arguments,
+        service=service,
+        stdout=io.StringIO(),
+        now=lambda: NOW,
+    )
+
+    assert code == EXIT_USAGE
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["upcoming", "--window-since", "2035-01-02T00:00:00+00:00"],
+        ["events", "--next", "7d", "--window-until", "2035-01-09T00:00:00+00:00"],
+        ["recent-materials", "1", "--window-since", "2035-01-02T00:00:00+00:00"],
+    ],
+)
+def test_cli_rejects_an_incomplete_explicit_window(arguments: list[str]) -> None:
+    service = _Service(_result())
+
+    code = run(arguments, service=service, stdout=io.StringIO(), now=lambda: NOW)
+
+    assert code == EXIT_USAGE
+    assert service.calls == []
+
+
 def test_json_preserves_the_core_schema_and_context() -> None:
     service = _Service(_result())
     output = io.StringIO()

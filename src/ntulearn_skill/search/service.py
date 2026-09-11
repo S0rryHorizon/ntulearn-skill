@@ -121,17 +121,23 @@ class SearchService:
         self.index = SearchIndex(database)
         self.parses = ParseRepository(database)
 
-    def search(self, query: SearchQuery) -> SearchResult:
+    def search(self, query: SearchQuery, *, offset: int = 0) -> SearchResult:
+        if query.cursor is not None:
+            raise ValueError("search cursors are consumed by CoreService")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("search offset must be a non-negative integer")
         match_query = _literal_match_query(query.text)
         try:
             with self.database.transaction() as connection:
                 self.index.ensure_current(connection)
                 course_key = self._course_key(connection, query.filters.course)
-                rows = self._matched_rows(connection, query, match_query, course_key)
+                rows = self._matched_rows(connection, query, match_query, course_key, offset)
                 coverage = self._coverage(connection, query, course_key)
         except (sqlite3.Error, SearchIndexError, ValueError):
             raise SearchError("local full-text search failed") from None
 
+        truncated = len(rows) > query.limit
+        rows = rows[: query.limit]
         chunk_keys = tuple(int(row["chunk_key"]) for row in rows if row["chunk_key"] is not None)
         try:
             windows = {
@@ -167,7 +173,7 @@ class SearchService:
                 "No matches found in the available local coverage; "
                 f"coverage is {completeness.value.lower()}."
             )
-        return SearchResult(items, coverage, completeness, as_of, warnings, message)
+        return SearchResult(items, coverage, completeness, as_of, warnings, message, truncated)
 
     def resolve_source(
         self,
@@ -490,6 +496,7 @@ class SearchService:
         query: SearchQuery,
         match_query: str,
         course_key: int | None,
+        offset: int,
     ) -> tuple[sqlite3.Row, ...]:
         clauses = ["search_document_fts MATCH ?"]
         parameters: list[object] = [match_query]
@@ -530,7 +537,7 @@ class SearchService:
                     WHERE resource_key = document.resource_key
                 ))"""
             )
-        parameters.append(query.limit)
+        parameters.extend((query.limit + 1, offset))
         sql = f"""
             SELECT document.*, provider.name AS provider, course_object.remote_key AS course_remote,
                    bm25(search_document_fts, 12.0, 5.0, 7.0, 10.0, 9.0, 8.0, 1.0)
@@ -559,7 +566,7 @@ class SearchService:
                      document.entity_key ASC,
                      document.source_ref_key ASC,
                      document.search_document_key ASC
-            LIMIT ?
+            LIMIT ? OFFSET ?
         """
         return tuple(connection.execute(sql, parameters))
 

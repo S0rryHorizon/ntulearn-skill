@@ -33,7 +33,7 @@ _SETTINGS = {
     "context_maximum_segments": 6,
     "maximum_candidates": 1000,
     "maximum_mentions_per_chunk": 100,
-    "rule_revision": 6,
+    "rule_revision": 7,
 }
 _SETTINGS_JSON = json.dumps(_SETTINGS, sort_keys=True, separators=(",", ":"))
 _SETTINGS_HASH = hashlib.sha256(_SETTINGS_JSON.encode("utf-8")).hexdigest()
@@ -89,6 +89,14 @@ _TYPE_PATTERNS: tuple[tuple[re.Pattern[str], EventType], ...] = (
     (re.compile(r"\b(?:project\s+milestone|milestone)\b", re.I), EventType.PROJECT_MILESTONE),
     (re.compile(r"\bsubmission\b", re.I), EventType.SUBMISSION),
 )
+_NON_ASSESSMENT_TEST_PREFIX = re.compile(
+    r"\b(?:scientific|experimental|laboratory|diagnostic|statistical|unit)\s+$",
+    re.I,
+)
+_NON_ASSESSMENT_TEST_SUFFIX = re.compile(
+    r"^\s+(?:the|a|an|whether|if|method|model|sample|hypothesis|system|circuit)\b", re.I
+)
+_NUMBERED_ASSESSMENT_TEST_SUFFIX = re.compile(r"^\s+(?:#\s*)?\d+\b", re.I)
 _EXPLICIT_START_PATTERN = re.compile(r"\b(?:starts?|begins?|takes?\s+place)\b", re.I)
 _NON_START_TEMPORAL_PATTERN = re.compile(
     r"\b(?:announced|published|opens?|available(?:\s+from)?)\b", re.I
@@ -207,6 +215,12 @@ class DeterministicEventExtractor:
 
     def __init__(self, database: Database) -> None:
         self.database = database
+
+    @property
+    def settings_hash(self) -> str:
+        """Return the rule settings identity used by extraction cache records."""
+
+        return _SETTINGS_HASH
 
     def extract_observation(self, observation_key: int) -> ExtractionResult:
         if observation_key <= 0:
@@ -1255,6 +1269,16 @@ class DeterministicEventExtractor:
         for pattern, event_type in _TYPE_PATTERNS:
             match = pattern.search(text)
             if match is not None:
+                if (
+                    event_type is EventType.TEST
+                    and match.group(0).casefold() == "test"
+                    and _NUMBERED_ASSESSMENT_TEST_SUFFIX.search(text[match.end() :]) is None
+                    and (
+                        _NON_ASSESSMENT_TEST_PREFIX.search(text[: match.start()]) is not None
+                        or _NON_ASSESSMENT_TEST_SUFFIX.search(text[match.end() :]) is not None
+                    )
+                ):
+                    continue
                 return event_type, match.group(0)
         return None, ""
 

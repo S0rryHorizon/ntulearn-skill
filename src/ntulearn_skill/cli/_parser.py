@@ -73,6 +73,16 @@ def _freshness_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-age-seconds", type=_max_age_seconds)
 
 
+def _pagination_options(parser: argparse.ArgumentParser, *, default_limit: int = 100) -> None:
+    parser.add_argument("--limit", type=_result_limit, default=default_limit)
+    parser.add_argument("--cursor")
+
+
+def _absolute_window_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--window-since")
+    parser.add_argument("--window-until")
+
+
 def build_parser() -> SafeArgumentParser:
     parser = SafeArgumentParser(
         prog="ntulearn",
@@ -87,11 +97,13 @@ def build_parser() -> SafeArgumentParser:
 
     courses = commands.add_parser("courses", help="List locally known courses")
     _common_options(courses)
+    _pagination_options(courses)
     _freshness_options(courses)
 
     materials = commands.add_parser("materials", help="List course materials")
     _common_options(materials)
     materials.add_argument("course_key", type=_positive_key)
+    _pagination_options(materials)
     _freshness_options(materials)
 
     library = commands.add_parser(
@@ -108,6 +120,8 @@ def build_parser() -> SafeArgumentParser:
     recent.add_argument("course_key", type=_positive_key)
     recent.add_argument("--days", type=_recent_days, default=14)
     recent.add_argument("--limit", type=_result_limit, default=100)
+    recent.add_argument("--cursor")
+    _absolute_window_options(recent)
     _freshness_options(recent)
 
     search = commands.add_parser("search", help="Search the deterministic local index")
@@ -115,17 +129,20 @@ def build_parser() -> SafeArgumentParser:
     search.add_argument("query")
     search.add_argument("--course", dest="course_key", type=_positive_key)
     search.add_argument("--limit", type=_result_limit, default=20)
+    search.add_argument("--cursor")
     search.add_argument("--neighbors", type=_neighbor_count, default=1)
     _freshness_options(search)
 
     announcements = commands.add_parser("announcements", help="List course announcements")
     _common_options(announcements)
     announcements.add_argument("course_key", type=_positive_key)
+    _pagination_options(announcements)
     _freshness_options(announcements)
 
     assessments = commands.add_parser("assessments", help="List course assessments")
     _common_options(assessments)
     assessments.add_argument("course_key", type=_positive_key)
+    _pagination_options(assessments)
     _freshness_options(assessments)
 
     events = commands.add_parser("events", help="List canonical events")
@@ -133,12 +150,16 @@ def build_parser() -> SafeArgumentParser:
     events.add_argument("--course", dest="course_key", type=_positive_key)
     events.add_argument("--show-conflicts", action="store_true")
     events.add_argument("--next", dest="next_window")
+    _pagination_options(events)
+    _absolute_window_options(events)
     _freshness_options(events)
 
     upcoming = commands.add_parser("upcoming", help="List events in an upcoming window")
     _common_options(upcoming)
     upcoming.add_argument("--course", dest="course_key", type=_positive_key)
     upcoming.add_argument("--days", type=_upcoming_days, default=7)
+    _pagination_options(upcoming)
+    _absolute_window_options(upcoming)
     _freshness_options(upcoming)
 
     source = commands.add_parser("source", help="Resolve a local provenance locator")
