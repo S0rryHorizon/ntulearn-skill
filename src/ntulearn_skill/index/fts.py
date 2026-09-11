@@ -83,15 +83,16 @@ COALESCE(
         SELECT observation.original_filename
         FROM resource_observation observation
         WHERE observation.resource_key = r.resource_key
-          AND (
-              v.version_key IS NULL
-              OR observation.version_key = v.version_key
-              OR observation.version_key IS NULL
-          )
-        ORDER BY
-            CASE WHEN observation.version_key = v.version_key THEN 0 ELSE 1 END,
-            observation.observed_at DESC,
-            observation.observation_key DESC
+          AND observation.version_key = v.version_key
+        ORDER BY observation.observed_at DESC, observation.observation_key DESC
+        LIMIT 1
+    ),
+    (
+        SELECT observation.original_filename
+        FROM resource_observation observation
+        WHERE observation.resource_key = r.resource_key
+          AND (v.version_key IS NULL OR observation.version_key IS NULL)
+        ORDER BY observation.observed_at DESC, observation.observation_key DESC
         LIMIT 1
     ),
     ''

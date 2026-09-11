@@ -36,7 +36,9 @@ jobs:
           python -m pip install uv==0.12.1
           uv sync --extra dev
       - name: Run synthetic test suite without sockets
-        run: uv run --no-sync python -m pytest -q
+        run: |
+          uv run --no-sync python -c 'import sqlite3, sys; print(sys.version); print("SQLite", sqlite3.sqlite_version)'
+          uv run --no-sync python -m pytest -q
 
   quality-and-package:
     name: Quality and package
