@@ -1,5 +1,7 @@
 # Contributing
 
+English | [简体中文](CONTRIBUTING.zh-CN.md)
+
 Thank you for helping improve `ntulearn-skill`. The project is still pre-release,
 and public release remains a deliberate human decision. Contributions must preserve
 the local-first, read-only and privacy boundaries in `AGENTS.md` and the accepted

@@ -1,5 +1,7 @@
 # Security policy
 
+English | [简体中文](SECURITY.zh-CN.md)
+
 ## Release and support status
 
 `ntulearn-skill` has no supported public release yet. The current source tree is
@@ -11,8 +13,9 @@ made for unpublished versions.
 
 GitHub **Private vulnerability reporting** is enabled for
 [S0rryHorizon/ntulearn-skill](https://github.com/S0rryHorizon/ntulearn-skill).
-The repository currently contains no project code or commits; enabling this reporting
-channel does not constitute a software release.
+Experimental source code is publicly available in the repository; no supported package
+release has been published. Enabling this reporting channel does not constitute a
+software release.
 
 For ordinary bugs, feature requests, and non-sensitive fixes, please open a public
 issue or pull request.

@@ -260,10 +260,13 @@ def _check_sdist_member(path: PurePosixPath) -> None:
         ".gitignore",
         "AGENTS.md",
         "CONTRIBUTING.md",
+        "CONTRIBUTING.zh-CN.md",
         "LICENSE",
         "PKG-INFO",
         "README.md",
+        "README.zh-CN.md",
         "SECURITY.md",
+        "SECURITY.zh-CN.md",
         "pyproject.toml",
         "uv.lock",
     }

@@ -1,5 +1,7 @@
 # Browser-assisted NTULearn use
 
+English | [简体中文](usage-browser.zh-CN.md)
+
 The supported experimental path separates fresh collection from local retrieval.
 Fresh collection is host-assisted through the installed browser Skill. Standalone
 `ntulearn` CLI commands and the daily-question Skill read the private local library;

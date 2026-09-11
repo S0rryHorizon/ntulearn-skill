@@ -1,5 +1,7 @@
 # ntulearn-skill
 
+**English** | [简体中文](README.zh-CN.md)
+
 `ntulearn-skill` is a local-first Python library and command-line interface for a
 private NTULearn course mirror. It stores course metadata, downloaded resources,
 parsed PDF/DOCX text, deterministic FTS5 search data, announcements, assessments,
@@ -7,10 +9,12 @@ event evidence, conflicts and synchronization state under a private runtime root
 
 > **Status: limited experimental retrieval candidate.** The current build supports a
 > private local daily trial using the installed Skill and a bounded, host-assisted
-> fresh-collection path. It has not been published. Event extraction remains a preview:
+> fresh-collection path. Experimental source code is available on GitHub; no package
+> release has been published. Event extraction remains a preview:
 > answers must retain source links and uncertain fields, and important dates,
 > requirements and venues still need source or manual checks. Candidate repository
-> and artifact checks passed; human publication review remains pending. See
+> and artifact checks describe their recorded validation scope; package publication
+> remains a separate decision. See
 > [daily-library validation](docs/development/daily-library-validation.md) and the
 > [release checklist](docs/development/public-release-checklist.md).
 
@@ -70,10 +74,12 @@ for the broader evidence boundary.
 
 ## Install from a local checkout
 
-The package declares Python 3.11 or newer. The latest integrated follow-up ran 556
+The package declares Python 3.11 or newer. The recorded integrated follow-up ran 556
 tests plus static checks and package builds on Python 3.12. The earlier Phase 5 run of
 463 tests on each of Python 3.11 through 3.14 is historical evidence and is not a
-current follow-up compatibility matrix. From this repository:
+current follow-up compatibility matrix. These historical local results are not a
+claim that the current [GitHub CI](https://github.com/S0rryHorizon/ntulearn-skill/actions)
+passes. From this repository:
 
 ```console
 python3 -m venv .venv
@@ -153,6 +159,11 @@ Read [data boundaries](docs/privacy/data-boundaries.md) before creating fixtures
 sharing diagnostics. Security reports should follow [SECURITY.md](SECURITY.md).
 
 ## Project documentation
+
+Chinese readers can start with the [Chinese README](README.zh-CN.md),
+[browser usage guide](docs/usage-browser.zh-CN.md),
+[contributor guide](CONTRIBUTING.zh-CN.md) and [security policy](SECURITY.zh-CN.md).
+Detailed architecture and API references below are currently in English.
 
 - [Usage and integration](docs/usage.md)
 - [Architecture overview](docs/architecture/overview.md)

@@ -121,3 +121,21 @@ def test_tracked_parent_symlink_cannot_escape_repository(tmp_path: Path) -> None
     (root / "docs").symlink_to(outside, target_is_directory=True)
     with pytest.raises(AuditError, match="symlink requires manual review"):
         audit_tracked(root, [root / "docs" / "payload.txt"])
+
+
+@pytest.mark.parametrize("name", ["README.zh-CN.md", "CONTRIBUTING.zh-CN.md", "SECURITY.zh-CN.md"])
+@pytest.mark.parametrize("secret", [False, True])
+def test_translated_sdist_documents_keep_content_checks(
+    tmp_path: Path, name: str, secret: bool
+) -> None:
+    sdist = tmp_path / "ntulearn_skill-0.0.0.tar.gz"
+    content = ("gh" + "p_" + "A" * 36).encode() if secret else "虚构文档示例。\n".encode()
+    with tarfile.open(sdist, "w:gz") as archive:
+        entry = tarfile.TarInfo(f"ntulearn_skill-0.0.0/{name}")
+        entry.size = len(content)
+        archive.addfile(entry, io.BytesIO(content))
+    if secret:
+        with pytest.raises(AuditError, match="GitHub token"):
+            audit_sdist(sdist)
+    else:
+        assert audit_sdist(sdist) == 1
