@@ -92,6 +92,27 @@ This project has not been published to a package index. A locally built wheel ca
 be installed by path; the development workflow and exact validation commands are in
 [the usage guide](docs/usage.md) and [contributor guide](CONTRIBUTING.md).
 
+## Run the offline synthetic demo
+
+With the local virtual environment active, install the optional development dependencies
+(including `reportlab`) and run the standalone example:
+
+```console
+python -m pip install '.[dev]'
+python examples/offline_demo.py
+```
+
+Each run creates and removes a new temporary private root. The example invents a course,
+builds a three-page PDF and a local capture manifest, then uses the normal source provider,
+Core sync/search and Codex dispatcher to show a match at physical page 2, its resource
+version and original-text source locator. Repeating the sync keeps one version. A missing
+term yields no local match, but the example reports `PARTIAL` source coverage and `UNKNOWN`
+overall completeness, so absence from the remote course is unproven. Once installed, the
+example needs no account, network access, real course data or existing
+`~/.ntulearn-skill/` store. This synthetic path demonstrates local retrieval behavior;
+real fresh collection still requires an
+authorized supported host flow described in the [browser usage guide](docs/usage-browser.md).
+
 ## Query the private local store
 
 The default runtime root is `~/.ntulearn-skill/`. Override it with `--root PRIVATE_ROOT`, then `NTULEARN_DATA_DIR`, then an absolute
@@ -109,10 +130,16 @@ ntulearn library-status --course 1 --freshness cache-only
 ntulearn materials 1 --freshness cache-only
 ntulearn recent-materials 1 --days 14 --freshness cache-only
 ntulearn search "synthetic optics" --course 1 --neighbors 1
+ntulearn search "synthetic optics" --course 1 --current-only --freshness cache-only
 ntulearn events --course 1 --show-conflicts
 ntulearn source 7 --kind source_locator --context-window 1
 ntulearn resource 3
 ```
+
+`search --current-only` matches only the current resource version in the local store;
+default search still includes historical versions. This flag does not refresh NTULearn
+or prove the local version is the latest remote version. The Codex dispatcher accepts
+the same opt-in as `{"query": "synthetic optics", "current_only": true}`.
 
 For a selected course whose local processing exceeds the default 64-job run bound,
 the configured browser-Skill workflow can repeat synchronization with a larger

@@ -20,6 +20,7 @@ from ntulearn_skill.core.api import (
     ManualIdentityResolution,
     MaterialFilter,
     ResourceRef,
+    SearchFilters,
     SearchQuery,
     SourceLocatorRef,
     SourceReference,
@@ -299,12 +300,23 @@ class CodexToolDispatcher:
             arguments = _arguments(
                 raw_arguments,
                 allowed=frozenset(
-                    {"query", "course_key", "limit", "neighbor_count", "freshness", "cursor"}
+                    {
+                        "query",
+                        "course_key",
+                        "limit",
+                        "neighbor_count",
+                        "freshness",
+                        "cursor",
+                        "current_only",
+                    }
                 ),
                 required=frozenset({"query"}),
             )
             query = SearchQuery(
                 _text(arguments["query"]),
+                filters=SearchFilters(
+                    include_historical_versions=not _boolean(arguments.get("current_only", False))
+                ),
                 limit=_integer(arguments.get("limit", 20), maximum=100),
                 neighbor_count=_integer(arguments.get("neighbor_count", 1), minimum=0, maximum=5),
                 cursor=None

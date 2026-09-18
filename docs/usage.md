@@ -88,6 +88,7 @@ ntulearn library-status --course 1 --freshness cache-only
 ntulearn materials 1 --freshness cache-only
 ntulearn recent-materials 1 --days 14 --freshness cache-only
 ntulearn search "synthetic interference" --course 1 --limit 20 --neighbors 1
+ntulearn search "synthetic interference" --course 1 --current-only --freshness cache-only
 ntulearn announcements 1
 ntulearn assessments 1
 ntulearn events --course 1 --show-conflicts
@@ -100,6 +101,12 @@ ntulearn resource 3 --version 5
 The integer arguments are opaque keys in this private local database. Do not substitute
 a course code, remote identifier or value from another runtime. A result might display
 the invented code `PH0000`, but commands still use its returned integer `local_key`.
+
+`search --current-only` limits matches to each resource's current version in the local
+store; it also works without `--course`. By default, search still includes historical
+versions. This flag does not refresh NTULearn or prove that the local version is the
+latest remote version. Other local records without a resource version retain their
+existing search behavior.
 
 `resource --include-local-path` is the only CLI query that opts into returning a private
 filesystem path. Avoid it in shared logs or agent output.
@@ -352,6 +359,12 @@ dictionary. It is useful when a host already knows how to register Python tools.
 The dispatcher exposes `get_library_status` and `get_recent_material_changes` as normal
 typed Core calls. Natural-language intent recognition and bilingual query decomposition
 remain in the Codex skill, so the Core does not pretend to implement general NLP.
+
+For local search, pass `{"query": "synthetic interference", "current_only": true}` to
+`CodexToolDispatcher.call("search", ...)`; `course_key` may be added for one course.
+Omitting `current_only` or setting it to `false` keeps historical-version matches.
+Only a JSON boolean is accepted. The flag does not change the selected freshness policy
+or trigger a remote refresh by itself.
 
 It is not an installed Codex plugin and does not provide tool registration, prompting,
 an agent runtime or a ChatGPT adapter. Those integrations remain host responsibilities or

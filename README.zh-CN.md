@@ -75,6 +75,23 @@ ntulearn --help
 本项目尚未发布到软件包索引。可通过路径安装本地构建的 wheel；开发流程和具体验证命令见
 [使用与集成指南（英文）](docs/usage.md)及[贡献指南](CONTRIBUTING.zh-CN.md)。
 
+## 运行离线 synthetic 演示
+
+激活本地虚拟环境后，安装包含 `reportlab` 的可选开发依赖，再运行独立示例：
+
+```console
+python -m pip install '.[dev]'
+python examples/offline_demo.py
+```
+
+每次运行都会新建并删除临时私人目录。示例虚构一门课程，生成三页 PDF 和本地采集清单，
+经现有来源 provider、Core 同步与检索、Codex dispatcher 展示第 2 物理页的命中、
+资源版本及原文来源定位。重复同步后仍只有一个版本。未命中的词只表示本地没有找到；
+示例会显示来源覆盖率为 `PARTIAL`、整体完整度为 `UNKNOWN`，因此不能推断远端课程没有该内容。
+安装依赖后，运行不需要账号、网络、真实课程资料，也不读取现有的 `~/.ntulearn-skill/` 资料库。
+它验证本地检索链路；真实实时采集仍需要[浏览器使用指南](docs/usage-browser.zh-CN.md)
+所述的已授权受支持宿主流程。
+
 ## 查询私人本地资料库
 
 默认运行目录为 `~/.ntulearn-skill/`。覆盖顺序依次为：显式 `--root PRIVATE_ROOT`、
@@ -90,10 +107,15 @@ ntulearn library-status --course 1 --freshness cache-only
 ntulearn materials 1 --freshness cache-only
 ntulearn recent-materials 1 --days 14 --freshness cache-only
 ntulearn search "synthetic optics" --course 1 --neighbors 1
+ntulearn search "synthetic optics" --course 1 --current-only --freshness cache-only
 ntulearn events --course 1 --show-conflicts
 ntulearn source 7 --kind source_locator --context-window 1
 ntulearn resource 3
 ```
+
+`search --current-only` 只匹配本地资料库中资源的当前版本；默认搜索仍包含历史版本。
+它不会刷新 NTULearn，也不能证明本地版本就是远端最新版本。Codex dispatcher 可传入
+`{"query": "synthetic optics", "current_only": true}` 使用同一选项。
 
 如果所选课程的本地处理超过默认每轮 64 个 job 的上限，已配置的浏览器 Skill 流程
 可以用更大的 `--max-jobs` 重复同步，继续处理幂等队列。裸 CLI 没有实时来源引擎。
