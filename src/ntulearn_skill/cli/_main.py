@@ -118,7 +118,13 @@ def _absolute_window(args: argparse.Namespace) -> TimeWindow | None:
 def _search_query(args: argparse.Namespace) -> SearchQuery:
     from ntulearn_skill.search import SearchFilters
 
-    return SearchQuery(args.query, SearchFilters(), args.limit, args.neighbors, args.cursor)
+    return SearchQuery(
+        args.query,
+        SearchFilters(include_historical_versions=not args.current_only),
+        args.limit,
+        args.neighbors,
+        args.cursor,
+    )
 
 
 def _invalid_json_constant(_value: str) -> NoReturn:

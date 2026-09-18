@@ -131,6 +131,7 @@ def build_parser() -> SafeArgumentParser:
     search.add_argument("--limit", type=_result_limit, default=20)
     search.add_argument("--cursor")
     search.add_argument("--neighbors", type=_neighbor_count, default=1)
+    search.add_argument("--current-only", action="store_true", default=False)
     _freshness_options(search)
 
     announcements = commands.add_parser("announcements", help="List course announcements")

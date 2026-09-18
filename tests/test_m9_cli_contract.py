@@ -156,6 +156,25 @@ def test_cli_forwards_bounded_list_and_search_continuations() -> None:
     assert search_query.cursor == "synthetic-search-cursor"
 
 
+@pytest.mark.parametrize("scoped", [False, True])
+@pytest.mark.parametrize("current_only", [False, True])
+def test_search_current_only_flag_maps_to_the_existing_filter(
+    scoped: bool, current_only: bool
+) -> None:
+    service = _Service(_result())
+    args = ["search", "synthetic query"]
+    if scoped:
+        args.extend(["--course", "1"])
+    if current_only:
+        args.append("--current-only")
+
+    assert run(args, service=service, stdout=io.StringIO()) == EXIT_COMPLETE
+    method, arguments, _keywords = service.calls[0]
+    assert method == ("search_course" if scoped else "search")
+    query = arguments[1] if scoped else arguments[0]
+    assert query.filters.include_historical_versions is not current_only
+
+
 def test_cli_continuation_uses_explicit_window_across_different_clock_values() -> None:
     service = _Service(_result())
     window_arguments = [
