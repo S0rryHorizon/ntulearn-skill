@@ -6,21 +6,58 @@ are synthetic. The commands do not configure live NTULearn access.
 ## Installation
 
 The package declares Python 3.11 or newer; the current validation matrix covers
-CPython 3.11 through 3.14. Install from a local checkout:
+CPython 3.11 through 3.14. For a maintained local checkout with linked skills, use a
+separate daily tool environment. From the canonical checkout, outside an activated
+development environment:
 
 ```console
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install .
-ntulearn --help
+uv tool install --python 3.12 --editable . --reinstall-package ntulearn-skill
+command -v ntulearn
+ntulearn runtime-info --json
 ```
 
-For development:
+The editable tool imports this checkout, while its dependencies remain isolated from
+the development `.venv`. Link both skills to this same checkout. Source and skill
+edits then take effect together, including uncommitted edits. Keep the checkout in
+place, and use another worktree with its own environment for experimental changes.
+Do not point the daily tool at whichever worktree happens to be active.
+
+After updating dependency declarations, package metadata or entry points, repeat the
+installation command from the canonical checkout. The tool resolves runtime dependencies
+from `pyproject.toml`; this command does not consume `uv.lock` or install development
+extras. The locked development environment remains separate. If `command -v` points
+at an activated `.venv`, deactivate it before checking the daily tool. If the CLI lacks
+`runtime-info`, update that installation before using current browser-skill instructions.
+
+`runtime-info --json` reports the running Python, imported package path, installed
+package version and capture-helper availability. It does not read configuration, open
+the private library or access a browser. Its installation paths are local diagnostics;
+do not publish them as course evidence. The package version alone (currently `0.0.0`)
+cannot distinguish source revisions. This command returns a standalone diagnostic
+object rather than a library-result envelope, and exits with code 0 on success.
+
+For Python helper calls, select the CLI's own interpreter in the same shell:
+
+```sh
+NTULEARN_PYTHON="$(ntulearn runtime-info --python)" || exit
+"$NTULEARN_PYTHON" -c 'from ntulearn_skill.client import prepare_browser_capture_directory, write_browser_capture_manifest'
+```
+
+Do not resolve the interpreter's symlink to its base Python, or substitute a generic
+`python3`; that can bypass the tool environment. Use this interpreter for capture
+construction as well as the normal `ntulearn` command for capture import.
+
+For development, run in each worktree independently:
 
 ```console
 uv sync --frozen --extra dev
 uv run --no-sync python -m pytest -q
 ```
+
+Never share one editable `.venv` across worktrees: its source binding and Python
+version belong to one checkout. An unused old `.venv` can be retired independently
+of its source, branch and lockfile; recreate it with `uv sync --frozen --extra dev
+--python 3.12` (or the chosen supported Python version) when returning to that worktree.
 
 To install a wheel built from this checkout, pass its path to pip:
 
@@ -35,6 +72,11 @@ No package-index release currently exists. The commands above operate only on th
 checkout and its locally built artifacts. See the executed
 [packaging validation](development/packaging-validation.md) for the tested interpreter
 matrix, artifact checks and clean-install evidence.
+
+A wheel installation is a fixed snapshot. Copy/install skills from the same source
+revision and upgrade both together; linking skills to a moving checkout while retaining
+an older wheel recreates a capability mismatch. The editable tool setup above avoids
+that manual code/skill synchronization for local development.
 
 ## Private runtime root
 
@@ -175,7 +217,8 @@ with `--cursor`. The CLI rejects a cursor paired only with a rolling window.
 
 ### Result meaning and exit codes
 
-`--json` emits schema version `1.0`. The envelope contains `operation`, `items`,
+For library query and operation results, `--json` emits schema version `1.0`.
+The envelope contains `operation`, `items`,
 `completeness`, `source_completeness`, `freshness_satisfied`, `truncated`,
 `next_cursor`, `as_of`, `freshness`, `coverage`, `conflicts`, `provenance`, `warnings`,
 `errors`, `refresh_attempted` and `local_reads`, plus the CLI `command` field.

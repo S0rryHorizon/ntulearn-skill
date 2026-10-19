@@ -95,6 +95,15 @@ def build_parser() -> SafeArgumentParser:
     _common_options(parser)
     commands = parser.add_subparsers(dest="command", required=True)
 
+    runtime = commands.add_parser(
+        "runtime-info",
+        help="Show the CLI interpreter and installed capabilities without opening a library",
+    )
+    _common_options(runtime)
+    runtime.add_argument(
+        "--python", action="store_true", help="Print only the active Python interpreter path"
+    )
+
     courses = commands.add_parser("courses", help="List locally known courses")
     _common_options(courses)
     _pagination_options(courses)

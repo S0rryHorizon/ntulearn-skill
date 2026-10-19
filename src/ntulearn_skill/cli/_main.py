@@ -37,6 +37,7 @@ EXIT_USAGE = 64
 
 _KNOWN_COMMANDS = frozenset(
     {
+        "runtime-info",
         "courses",
         "materials",
         "library-status",
@@ -160,6 +161,8 @@ def _manual_decision(args: argparse.Namespace) -> ManualResolution:
 def _validate_args(args: argparse.Namespace) -> None:
     """Reject semantic CLI errors before runtime setup or a core call."""
 
+    if args.command == "runtime-info" and args.python and getattr(args, "json", False):
+        raise UsageError("invalid command arguments")
     if hasattr(args, "max_age_seconds"):
         _freshness(args)
     if args.command == "search":
@@ -393,6 +396,14 @@ def run(
         destination = output if json_requested else errors
         print(render_json(payload) if json_requested else render_human(payload), file=destination)
         return EXIT_USAGE
+    if command == "runtime-info":
+        if args.python:
+            print(sys.executable, file=output)
+        else:
+            from ntulearn_skill.cli._runtime_info import render_runtime_info
+
+            print(render_runtime_info(json_output=json_requested), file=output)
+        return EXIT_COMPLETE
     try:
         if service is None:
             from ntulearn_skill.core.api import CoreService

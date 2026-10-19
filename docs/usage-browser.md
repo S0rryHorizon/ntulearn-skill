@@ -22,6 +22,12 @@ then reload skills or start a
 new task as required by the host. The source distribution includes those folders, but
 the Python wheel alone does not install a Codex skill or a browser connection.
 
+Keep the CLI and linked skills on the same canonical checkout. Check
+`ntulearn runtime-info --json` before capture, and use the interpreter returned by
+`ntulearn runtime-info --python` for the capture helpers. The diagnostic does not open
+the private library. See [installation and upgrades](usage.md#installation) if the
+command or required helpers are missing.
+
 ## Normal daily flow
 
 1. Configure the private runtime root as described in the README.

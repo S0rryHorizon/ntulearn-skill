@@ -23,6 +23,11 @@ safe substitute. The importer opens the directory and manifest without following
 then validates and reads the manifest through the same bounded file descriptor. Permission failures
 produce a fixed remediation hint without echoing the capture path or manifest content.
 
+Run the Python example below with the interpreter returned by
+`ntulearn runtime-info --python`, and check `ntulearn runtime-info --json` for both
+helper capabilities before collection. This ties construction and import to the same
+installed runtime; see [installation and upgrades](usage.md#installation).
+
 ```python
 from ntulearn_skill.client import (
     prepare_browser_capture_directory,

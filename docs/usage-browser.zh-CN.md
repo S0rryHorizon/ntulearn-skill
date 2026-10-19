@@ -10,6 +10,10 @@
 
 按仓库的[安装说明](../README.zh-CN.md)安装 Python 项目。将 `skills/ntulearn-browser` 和 `skills/ntulearn` 安装到宿主的 Codex skills 位置（通常分别为 `~/.codex/skills/ntulearn-browser` 和 `~/.codex/skills/ntulearn`），然后按宿主要求重新加载 skills 或开始新任务。源码发行包包含这些目录，但单独安装 Python wheel 不会安装 Codex Skill 或浏览器连接。
 
+CLI 与链接技能应使用同一主仓库。采集前运行 `ntulearn runtime-info --json`，并使用
+`ntulearn runtime-info --python` 返回的解释器执行采集帮助函数。诊断不会打开私人资料库。
+若命令或帮助函数缺失，先按[安装与升级说明（英文）](usage.md#installation)更新实际 CLI。
+
 ## 日常使用流程
 
 1. 按 README 配置私人运行根目录。

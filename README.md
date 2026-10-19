@@ -79,17 +79,25 @@ tests plus static checks and package builds on Python 3.12. The earlier Phase 5 
 463 tests on each of Python 3.11 through 3.14 is historical evidence and is not a
 current follow-up compatibility matrix. These historical local results are not a
 claim that the current [GitHub CI](https://github.com/S0rryHorizon/ntulearn-skill/actions)
-passes. From this repository:
+passes. For daily CLI use with skills linked to this checkout, run from the
+canonical checkout (without activating a development environment):
 
 ```console
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install .
-ntulearn --help
+uv tool install --python 3.12 --editable . --reinstall-package ntulearn-skill
+command -v ntulearn
+ntulearn runtime-info --json
 ```
 
+This keeps a separate tool environment while importing this checkout's current
+source, so linked skills and CLI code advance together. Source edits, including
+uncommitted edits, affect the daily tool immediately. Keep this checkout available;
+use separate worktrees and their own `.venv` for experimental changes. Repeat the
+install command after dependency, package metadata or entry-point changes. The tool
+resolves dependencies from `pyproject.toml`; development uses `uv.lock`.
+
 This project has not been published to a package index. A locally built wheel can
-be installed by path; the development workflow and exact validation commands are in
+be installed by path, but its skills must come from the same source revision and
+both must be updated together. Development, upgrade and interpreter-selection steps are in
 [the usage guide](docs/usage.md) and [contributor guide](CONTRIBUTING.md).
 
 ## Query the private local store

@@ -26,6 +26,14 @@ are zero-based internally and should be presented as one-based page numbers to u
 
 ## Fresh browser observation
 
+Before creating a capture, run `ntulearn runtime-info --json` and confirm both
+`browser_capture_helpers` are available. Obtain the matching interpreter with
+`NTULEARN_PYTHON="$(ntulearn runtime-info --python)"` and execute all Python capture
+helper calls with `"$NTULEARN_PYTHON"`. Keep this interpreter path as returned; do not
+resolve its symlink to a base Python. An unknown diagnostic command or missing helper
+means the CLI installation must be updated using the project installation guide before
+collection. Do not substitute an arbitrary `python3` or another worktree's `.venv`.
+
 1. Read the current connected browser tool's full usage rules and advertised capabilities.
    Use its supported Chrome host and a dedicated tab. Inspect current login state; any
    login or MFA is completed by the user in the normal interface. Never request cookies,

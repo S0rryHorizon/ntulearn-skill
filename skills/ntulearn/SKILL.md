@@ -10,6 +10,13 @@ Use the installed `ntulearn` CLI as a thin interface to the standalone Core. Rea
 course selection, bilingual lexical decomposition, evidence fallbacks, and truthful
 empty-result wording.
 
+When setting up or diagnosing an installation, use `command -v ntulearn` and
+`ntulearn runtime-info --json` to identify the actual CLI and imported source. This
+diagnostic does not open the private library. Keep the CLI and both linked skills on
+the same checkout, or update a wheel and its matching skill snapshot together. See
+[installation and upgrades](../../docs/usage.md#installation); do not silently use a
+different worktree's environment to work around an outdated daily CLI.
+
 Start with cache-only local queries. Do not open a browser, synchronize, fetch a
 resource, use a network, or create a new visual while fulfilling a cache-only request.
 Use the `ntulearn-browser` skill only when the user asks for fresh source observation.

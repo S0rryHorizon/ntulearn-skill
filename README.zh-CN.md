@@ -63,16 +63,21 @@ Codex dispatcher 是 Python 集成接口。浏览器 Skill 需要已连接且受
 556 项测试、静态检查及软件包构建。较早的 Phase 5 曾在 Python 3.11–3.14 上分别运行
 463 项测试；这是历史证据，不是当前后续版本的兼容性矩阵。这些历史本地结果不表示
 当前 [GitHub CI](https://github.com/S0rryHorizon/ntulearn-skill/actions) 已通过。
-在本仓库目录中运行：
+日常 CLI 配合链接到本仓库的技能使用时，在主仓库目录运行（无需激活开发环境）：
 
 ```console
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install .
-ntulearn --help
+uv tool install --python 3.12 --editable . --reinstall-package ntulearn-skill
+command -v ntulearn
+ntulearn runtime-info --json
 ```
 
-本项目尚未发布到软件包索引。可通过路径安装本地构建的 wheel；开发流程和具体验证命令见
+这样保留独立工具环境，同时直接导入本仓库的当前源码，使链接技能和 CLI 代码同步更新。
+源码修改（包括未提交修改）会立即影响日常命令；应保留主仓库，并在各自拥有 `.venv`
+的独立工作树中进行实验性开发。依赖、软件包元数据或命令入口改变后，重新运行安装命令。
+工具环境按 `pyproject.toml` 解析依赖；开发环境使用 `uv.lock`。
+
+本项目尚未发布到软件包索引。也可通过路径安装本地构建的 wheel，但技能必须来自同一源码版本，
+并与 wheel 一起更新。开发、升级和解释器选择说明见
 [使用与集成指南（英文）](docs/usage.md)及[贡献指南](CONTRIBUTING.zh-CN.md)。
 
 ## 查询私人本地资料库
