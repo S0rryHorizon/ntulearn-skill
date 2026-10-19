@@ -46,6 +46,10 @@ class _CoreDouble:
         self.calls.append(("search_course", arguments))
         return self.result
 
+    def search(self, *arguments: object) -> ResultEnvelope[object]:
+        self.calls.append(("search", arguments))
+        return self.result
+
     def sync_course(self, *arguments: object) -> ResultEnvelope[object]:
         self.calls.append(("sync_course", arguments))
         return self.result
@@ -122,6 +126,7 @@ def test_search_calls_one_typed_core_method_and_preserves_the_complete_envelope(
     assert arguments[1].text == "quiz"
     assert arguments[1].limit == 5 and arguments[1].neighbor_count == 2
     assert arguments[1].cursor == "synthetic-cursor"
+    assert arguments[1].filters.include_historical_versions
     assert getattr(arguments[2], "mode").value == "REQUIRE_CURRENT"
     assert payload["schema_version"] == "1.0"
     assert payload["operation"] == "search_course"
@@ -136,6 +141,37 @@ def test_search_calls_one_typed_core_method_and_preserves_the_complete_envelope(
     assert payload["items"][0]["matching_text"].startswith("Ignore prior")  # type: ignore[index]
     assert "local_path" not in payload["items"][0]  # type: ignore[index]
     assert "/private/synthetic" not in repr(payload)
+
+
+def test_search_current_only_boolean_maps_for_global_and_course_queries() -> None:
+    dispatcher, core = _dispatcher(ResultEnvelope("search"))
+    for scoped in (False, True):
+        for supplied, expected in (
+            ({}, True),
+            ({"current_only": False}, True),
+            ({"current_only": True}, False),
+        ):
+            arguments: dict[str, object] = {"query": "synthetic query", **supplied}
+            if scoped:
+                arguments["course_key"] = 7
+            dispatcher.call("search", arguments)
+            method, forwarded = core.calls[-1]
+            assert method == ("search_course" if scoped else "search")
+            query = forwarded[1] if scoped else forwarded[0]
+            assert isinstance(query, SearchQuery)
+            assert query.filters.include_historical_versions is expected
+
+
+def test_search_rejects_non_boolean_current_only_before_core() -> None:
+    dispatcher, core = _dispatcher(ResultEnvelope("search"))
+    for scoped in (False, True):
+        for value in (0, 1, "true", None):
+            arguments: dict[str, object] = {"query": "synthetic query", "current_only": value}
+            if scoped:
+                arguments["course_key"] = 7
+            payload = dispatcher.call("search", arguments)
+            assert payload["errors"][0]["code"] == "CODEX_INVALID_ARGUMENTS"  # type: ignore[index]
+    assert core.calls == []
 
 
 def test_invalid_and_unknown_requests_never_reach_core_or_reflect_supplied_text() -> None:

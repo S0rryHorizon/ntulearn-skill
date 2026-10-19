@@ -6,8 +6,10 @@ import io
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from test_search_adversarial import _course, _harness, _ingest_and_parse
 
 from ntulearn_skill.cli import run
 from ntulearn_skill.client import AnnouncementSourceRecord, AssessmentSourceRecord
@@ -20,7 +22,9 @@ from ntulearn_skill.core import (
     ContentId,
     CourseId,
 )
+from ntulearn_skill.core.api import CoreService
 from ntulearn_skill.events import EventRepository
+from ntulearn_skill.integrations.codex import CodexToolDispatcher
 from ntulearn_skill.storage import Database, DomainRepository, ResourceRepository, RuntimePaths
 
 NOW = datetime(2036, 2, 3, 4, 5, tzinfo=UTC)
@@ -170,3 +174,177 @@ def test_sync_without_a_configured_source_returns_a_typed_safe_error(
         }
     ]
     assert str(root) not in json.dumps(payload)
+
+
+class _NoRefreshEngine:
+    def __init__(self, database: Database) -> None:
+        self.domain = DomainRepository(database)
+        self.source = SimpleNamespace(provider_name="synthetic")
+        self.calls: list[object] = []
+
+    def refresh_scope(self, scope: object) -> None:
+        self.calls.append(scope)
+        raise AssertionError("cache-only search must not call the provider")
+
+
+@pytest.fixture
+def versioned_search(tmp_path: Path) -> tuple[CoreService, _NoRefreshEngine, int, int, set[int]]:
+    harness = _harness(tmp_path)
+    course_id, content_id = _course(
+        harness, "current-only", code="PH0001", title="Invented Versioned Course"
+    )
+    old, _ = _ingest_and_parse(
+        harness,
+        content_id,
+        attachment_key="versioned-document",
+        pages=("Legacyversionbeacon exists only in the first invented version.",),
+        minute=1,
+    )
+    new, _ = _ingest_and_parse(
+        harness,
+        content_id,
+        attachment_key="versioned-document",
+        pages=("Currentversionbeacon appears in the new invented version.",),
+        minute=2,
+    )
+    another, _ = _ingest_and_parse(
+        harness,
+        content_id,
+        attachment_key="another-document",
+        pages=("Currentversionbeacon appears in another current document.",),
+        minute=3,
+    )
+    course_record = harness.domain.get_course(course_id)
+    assert course_record is not None
+    engine = _NoRefreshEngine(harness.database)
+    service = CoreService(
+        harness.database,
+        runtime_paths=harness.paths,
+        sync_engine=engine,  # type: ignore[arg-type]
+        now=lambda: NOW,
+    )
+    return (
+        service,
+        engine,
+        course_record.key,
+        old.version.key,
+        {
+            new.version.key,
+            another.version.key,
+        },
+    )
+
+
+def _search_cli(service: CoreService, *arguments: str) -> dict[str, object]:
+    output = io.StringIO()
+    code = run(["--json", "search", *arguments], service=service, stdout=output)
+    assert code in {0, 1, 2, 3}
+    return json.loads(output.getvalue())
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+def test_current_only_cli_uses_real_versioned_index_without_refresh(
+    versioned_search: tuple[CoreService, _NoRefreshEngine, int, int, set[int]], scoped: bool
+) -> None:
+    service, engine, course_key, old_key, new_keys = versioned_search
+    scope = ("--course", str(course_key)) if scoped else ()
+    default = _search_cli(service, "Legacyversionbeacon", *scope)
+    current_old = _search_cli(service, "Legacyversionbeacon", *scope, "--current-only")
+    current_new = _search_cli(service, "Currentversionbeacon", *scope, "--current-only")
+
+    assert [item["version_key"] for item in default["items"]] == [old_key]  # type: ignore[index]
+    assert current_old["items"] == []
+    assert {item["version_key"] for item in current_new["items"]} == new_keys  # type: ignore[index]
+    assert all(item["source"] for item in current_new["items"])  # type: ignore[index]
+    assert default["refresh_attempted"] is current_old["refresh_attempted"] is False
+    assert current_new["refresh_attempted"] is False
+    assert default["source_completeness"] == current_old["source_completeness"]
+    assert default["freshness"] == current_old["freshness"]
+    assert engine.calls == []
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+def test_current_only_dispatcher_uses_real_versioned_index_and_strict_boolean(
+    versioned_search: tuple[CoreService, _NoRefreshEngine, int, int, set[int]], scoped: bool
+) -> None:
+    service, engine, course_key, old_key, new_keys = versioned_search
+    dispatcher = CodexToolDispatcher(service)
+    scope = {"course_key": course_key} if scoped else {}
+    default = dispatcher.call("search", {"query": "Legacyversionbeacon", **scope})
+    explicit_false = dispatcher.call(
+        "search", {"query": "Legacyversionbeacon", "current_only": False, **scope}
+    )
+    current_old = dispatcher.call(
+        "search", {"query": "Legacyversionbeacon", "current_only": True, **scope}
+    )
+    current_new = dispatcher.call(
+        "search", {"query": "Currentversionbeacon", "current_only": True, **scope}
+    )
+
+    assert [item["version_key"] for item in default["items"]] == [old_key]  # type: ignore[index]
+    assert explicit_false["items"] == default["items"]
+    assert current_old["items"] == []
+    assert {item["version_key"] for item in current_new["items"]} == new_keys  # type: ignore[index]
+    assert default["source_completeness"] == current_old["source_completeness"]
+    assert default["freshness"] == current_old["freshness"]
+    assert all(
+        result["refresh_attempted"] is False
+        for result in (default, explicit_false, current_old, current_new)
+    )
+    assert engine.calls == []
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+def test_current_only_real_cursor_stays_in_scope_and_rejects_changed_flag(
+    versioned_search: tuple[CoreService, _NoRefreshEngine, int, int, set[int]], scoped: bool
+) -> None:
+    service, engine, course_key, _old_key, new_keys = versioned_search
+    scope = ("--course", str(course_key)) if scoped else ()
+    first = _search_cli(service, "Currentversionbeacon", *scope, "--current-only", "--limit", "1")
+    cursor = first["next_cursor"]
+    assert isinstance(cursor, str)
+    second = _search_cli(
+        service,
+        "Currentversionbeacon",
+        *scope,
+        "--current-only",
+        "--limit",
+        "1",
+        "--cursor",
+        cursor,
+    )
+    changed_flag = _search_cli(
+        service, "Currentversionbeacon", *scope, "--limit", "1", "--cursor", cursor
+    )
+    assert {first["items"][0]["version_key"], second["items"][0]["version_key"]} == new_keys  # type: ignore[index]
+    assert changed_flag["errors"]
+    assert changed_flag["items"] == []
+
+    dispatcher = CodexToolDispatcher(service)
+    tool_scope = {"course_key": course_key} if scoped else {}
+    tool_first = dispatcher.call(
+        "search",
+        {"query": "Currentversionbeacon", "current_only": True, "limit": 1, **tool_scope},
+    )
+    tool_cursor = tool_first["next_cursor"]
+    assert isinstance(tool_cursor, str)
+    tool_second = dispatcher.call(
+        "search",
+        {
+            "query": "Currentversionbeacon",
+            "current_only": True,
+            "limit": 1,
+            "cursor": tool_cursor,
+            **tool_scope,
+        },
+    )
+    tool_changed = dispatcher.call(
+        "search",
+        {"query": "Currentversionbeacon", "limit": 1, "cursor": tool_cursor, **tool_scope},
+    )
+    assert {
+        tool_first["items"][0]["version_key"],  # type: ignore[index]
+        tool_second["items"][0]["version_key"],  # type: ignore[index]
+    } == new_keys
+    assert tool_changed["errors"] and tool_changed["items"] == []
+    assert engine.calls == []
