@@ -44,6 +44,14 @@ credential or prepare a capture manifest. If Chrome is unavailable or logged out
 agent reports that host condition and requests normal interactive login without asking
 for browser secrets.
 
+On macOS + Chrome, downloading an original may open a native Save dialog that is absent
+from the page DOM and download-event observations. The Skill checks Chrome's native UI
+after one click, confirms the current filename and private destination, and verifies the
+actual saved bytes. Delayed dialogs and concurrent user actions require re-observation,
+not duplicate clicks. A timeout leaves the cause unknown; explicit tool/access denial
+and `ERR_BLOCKED_BY_CLIENT` stop the affected path and are reported separately. See the
+[download and diagnosis workflow](../skills/ntulearn-browser/references/host-boundaries.md#macos--chrome-downloads).
+
 After collection, representative local commands are:
 
 ```text

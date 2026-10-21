@@ -24,6 +24,8 @@ CLI 与链接技能应使用同一主仓库。采集前运行 `ntulearn runtime-
 
 正常 Skill 流程不要求用户编写连接对象、复制凭据或准备 capture 清单。如果 Chrome 不可用或已退出登录，代理会报告这一宿主状态，并请求用户正常交互式登录，而不会索要浏览器机密。
 
+在 macOS + Chrome 上，下载原始文件可能打开原生“保存”窗口，而网页 DOM 和下载事件未反映该窗口。Skill 会在点击一次后检查 Chrome 原生界面，确认当前文件名和私人保存目录，并检查实际落盘的文件。弹窗延迟出现或用户同时操作时，应重新观察，不重复点击下载。超时只能说明原因尚不明确；明确的工具／访问拒绝与 `ERR_BLOCKED_BY_CLIENT` 则应分别记录并停止对应路径。详见[下载与故障诊断流程（英文）](../skills/ntulearn-browser/references/host-boundaries.md#macos--chrome-downloads)。
+
 采集后，常用本地命令包括：
 
 ```text

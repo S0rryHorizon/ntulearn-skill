@@ -43,7 +43,12 @@ collection. Do not substitute an arbitrary `python3` or another worktree's `.ven
    `bundle_root = prepare_browser_capture_directory(PRIVATE_BUNDLE_ROOT)` from
    `ntulearn_skill.client` before saving anything, then use ordinary visible download
    controls to save original bytes into that new owner-only private capture bundle. Do
-   not navigate directly to signed asset URLs.
+   not navigate directly to signed asset URLs. On macOS + Chrome, follow the
+   [native Save workflow](references/host-boundaries.md#macos--chrome-downloads): click
+   once, inspect Chrome's native windows, and verify the saved file. A missing DOM change
+   or download-event timeout is not a permission denial; a delayed dialog is not a reason
+   to click Download again. Recheck the current filename, directory and window before Save,
+   especially when the user is also operating Chrome. An explicit denial stops that path.
 3. Collect the original visible title/body/labels and explicitly observed identifiers in
    the source adapter's capture format. Preserve raw date wording and uncertainty; do not
    infer an unavailable identifier, timezone, due date, exhaustive coverage or event merge.
@@ -67,6 +72,6 @@ Real captures, manifests, downloads, labels, database state and validation repor
 outside Git under `~/.ntulearn-skill/` (or the project's ignored `.local/`). Do not store
 signed URLs, browser credentials, complete page dumps or unrelated personal information
 in the bundle. Public fixtures must be invented independently of real course material.
-`UNKNOWN`: the exact native download path and permission behavior has not been validated on every
-supported browser host. Recheck the generated bundle through the normal CLI import rather than
-assuming host filesystem behavior.
+Native Save handling depends on the current host's advertised tools. If native observation is
+unavailable, report that specific gap without inferring a permission failure. Recheck the generated
+bundle through the normal CLI import; report download, format validation and parsing separately.

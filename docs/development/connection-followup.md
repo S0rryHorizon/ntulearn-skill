@@ -46,6 +46,20 @@ client-blocking component remains unknown and is not needed to use the supported
 
 ## Product connection boundary
 
+### Native Save incident follow-up (2026-10-21)
+
+`OBSERVED` (user-reported incident, not rerun here): normal original-file downloads on
+macOS + Chrome opened a native Save dialog that page DOM and download-event waiting did
+not expose. Inspecting Chrome through `cua.getApp('com.google.Chrome')` and completing
+the current Save dialog allowed multiple originals to be saved without permission changes
+or full CDP. A separate resource still returned `ERR_BLOCKED_BY_CLIENT`; that failure
+must not be relabeled as the resolved Save-dialog wait. Its enforcing component remains
+`UNKNOWN`. No course identities, filenames or raw authenticated observations are recorded
+here. The maintained procedure is in the
+[host boundary reference](../../skills/ntulearn-browser/references/host-boundaries.md).
+
+### Host-assisted capture
+
 The supported fresh-read path is browser-host-assisted: normal UI observations and
 original downloads enter a typed private capture, which the source adapter validates and
 the existing Core processes. The host does not implement domain reconciliation, parsing
