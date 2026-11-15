@@ -35,20 +35,29 @@ means the CLI installation must be updated using the project installation guide 
 collection. Do not substitute an arbitrary `python3` or another worktree's `.venv`.
 
 1. Read the current connected browser tool's full usage rules and advertised capabilities.
-   Use its supported Chrome host and a dedicated tab. Inspect current login state; any
+   Honor the user's explicit browser choice and use a dedicated tab. Prefer the
+   [in-app browser](references/host-boundaries.md#in-app-browser-downloads) for quiet
+   collection; its original-menu download and copy into a private bundle have a bounded
+   successful trial. Do not silently switch hosts.
+   Inspect current login state; any
    login or MFA is completed by the user in the normal interface. Never request cookies,
    tokens, browser-password exports or a hand-written connection object.
 2. Choose only the authorized course/resource scope. Read normal course cards and content
    pages, preserving the observed course/content identifiers and source page path. Use
    `bundle_root = prepare_browser_capture_directory(PRIVATE_BUNDLE_ROOT)` from
    `ntulearn_skill.client` before saving anything, then use ordinary visible download
-   controls to save original bytes into that new owner-only private capture bundle. Do
-   not navigate directly to signed asset URLs. On macOS + Chrome, follow the
-   [native Save workflow](references/host-boundaries.md#macos--chrome-downloads): click
-   once, inspect Chrome's native windows, and verify the saved file. A missing DOM change
-   or download-event timeout is not a permission denial; a delayed dialog is not a reason
-   to click Download again. Recheck the current filename, directory and window before Save,
-   especially when the user is also operating Chrome. An explicit denial stops that path.
+   controls to obtain original bytes, then validate and place them in that new owner-only
+   private capture bundle. Do not navigate directly to signed asset URLs. In the in-app
+   browser, baseline the known download directory for the observed filename before
+   clicking; check for a newly saved file even when the download event times out.
+   Validate and copy only the attributable new file into the private bundle. On macOS +
+   Chrome, follow the [quiet-download preflight](references/host-boundaries.md#quiet-downloads-default)
+   before clicking: avoid native Save dialogs by default and do not silently fall back
+   to foreground interaction. Register a bounded download wait before clicking once and
+   verify the newly saved file. Use the [native Save workflow](references/host-boundaries.md#interactive-save-opt-in)
+   only when the user accepts an interactive download. A missing DOM change or
+   download-event timeout is not a permission denial or a reason to click again. An
+   explicit denial stops that path.
 3. Collect the original visible title/body/labels and explicitly observed identifiers in
    the source adapter's capture format. Preserve raw date wording and uncertainty; do not
    infer an unavailable identifier, timezone, due date, exhaustive coverage or event merge.

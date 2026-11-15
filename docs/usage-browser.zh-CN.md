@@ -6,7 +6,7 @@
 
 ## 已验证的宿主环境
 
-当前有限范围的试用使用 macOS 上的 Codex 和已连接的 Chrome 浏览器。请通过 Chrome 的正常界面登录并完成 MFA。代理会在采集前检查当前登录状态；上一次运行保存的登录状态不能证明当前会话可用。
+有限范围的试用覆盖 macOS 上的 Codex、已连接的 Chrome 和内置浏览器。内置浏览器已通过原文件菜单下载一份 PDF，用户报告未出现保存弹窗或前台打断；文件校验后成功复制进指定私人目录。免打扰采集优先使用内置浏览器。请通过所选浏览器的正常界面登录并完成 MFA。代理会在采集前检查当前登录状态；上一次运行保存的登录状态不能证明当前会话可用。
 
 按仓库的[安装说明](../README.zh-CN.md)安装 Python 项目。将 `skills/ntulearn-browser` 和 `skills/ntulearn` 安装到宿主的 Codex skills 位置（通常分别为 `~/.codex/skills/ntulearn-browser` 和 `~/.codex/skills/ntulearn`），然后按宿主要求重新加载 skills 或开始新任务。源码发行包包含这些目录，但单独安装 Python wheel 不会安装 Codex Skill 或浏览器连接。
 
@@ -17,14 +17,14 @@ CLI 与链接技能应使用同一主仓库。采集前运行 `ntulearn runtime-
 ## 日常使用流程
 
 1. 按 README 配置私人运行根目录。
-2. 在 Chrome 中打开 NTULearn，正常登录并完成 MFA。
+2. 在所选浏览器中打开 NTULearn，按需正常登录并完成 MFA。
 3. 请 `ntulearn-browser` Skill 刷新一个明确指定的小范围课程。宿主使用可见页面和普通下载控件，再将范围受限的私人 capture 传入现有 Core 同步流程。
 4. 向 `ntulearn` Skill 提出日常问题，或使用下面的本地 CLI 命令。
 5. 对重要日期、要求、考试范围或地点，请检查返回的精确来源。将事件提取结果视为预览，保留不确定性和冲突。
 
-正常 Skill 流程不要求用户编写连接对象、复制凭据或准备 capture 清单。如果 Chrome 不可用或已退出登录，代理会报告这一宿主状态，并请求用户正常交互式登录，而不会索要浏览器机密。
+正常 Skill 流程不要求用户编写连接对象、复制凭据或准备 capture 清单。如果所选浏览器不可用或已退出登录，代理会报告这一宿主状态，并请求用户正常交互式登录，而不会索要浏览器机密。
 
-在 macOS + Chrome 上，下载原始文件可能打开原生“保存”窗口，而网页 DOM 和下载事件未反映该窗口。Skill 会在点击一次后检查 Chrome 原生界面，确认当前文件名和私人保存目录，并检查实际落盘的文件。弹窗延迟出现或用户同时操作时，应重新观察，不重复点击下载。超时只能说明原因尚不明确；明确的工具／访问拒绝与 `ERR_BLOCKED_BY_CLIENT` 则应分别记录并停止对应路径。详见[下载与故障诊断流程（英文）](../skills/ntulearn-browser/references/host-boundaries.md#macos--chrome-downloads)。
+内置浏览器可能已经保存文件，但下载事件仍报超时。Skill 会先记录已知下载目录中目标文件名的基线，再点击一次，识别并校验本次新文件，最后复制到仅当前用户可访问的私人 capture 目录。无需改动日常 Chrome 设置，也不能将旧文件当成本次下载。事件未回传的内部原因仍未知；下载验证与资料库导入分别报告。Chrome 原生保存窗口可能抢前台，需要用户同意才使用交互式保存。超时不能作为重复点击的理由；明确的工具／访问拒绝与 `ERR_BLOCKED_BY_CLIENT` 则应分别记录并停止对应路径。详见[下载与故障诊断流程（英文）](../skills/ntulearn-browser/references/host-boundaries.md#in-app-browser-downloads)。
 
 采集后，常用本地命令包括：
 

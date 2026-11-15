@@ -9,8 +9,11 @@ they do not log in to NTULearn or control a browser.
 
 ## Validated host
 
-The bounded current trial used Codex on macOS with a connected Chrome browser. Log in
-and complete MFA through Chrome's normal interface. The agent checks the current login
+Bounded trials used Codex on macOS with connected Chrome and the in-app browser. The
+in-app browser's original-file menu saved a PDF without a reported Save/focus interruption;
+the file was validated and copied into the requested private bundle. Prefer that host for
+quiet collection. Log in and complete MFA through the chosen browser's normal interface.
+The agent checks the current login
 state before collection; a saved login from an earlier run is not evidence that the
 current session works.
 
@@ -31,7 +34,7 @@ command or required helpers are missing.
 ## Normal daily flow
 
 1. Configure the private runtime root as described in the README.
-2. In Chrome, open NTULearn and complete normal login and MFA.
+2. Open NTULearn in the chosen browser and complete normal login and MFA if needed.
 3. Ask the `ntulearn-browser` Skill to refresh a small, named course scope. The host
    uses visible pages and ordinary download controls, then passes the bounded private
    capture into the existing Core synchronization path.
@@ -40,17 +43,19 @@ command or required helpers are missing.
    source. Treat event extraction as a preview and retain uncertainty or conflicts.
 
 The normal Skill flow does not require the user to write a connection object, copy a
-credential or prepare a capture manifest. If Chrome is unavailable or logged out, the
+credential or prepare a capture manifest. If the chosen browser is unavailable or logged out, the
 agent reports that host condition and requests normal interactive login without asking
 for browser secrets.
 
-On macOS + Chrome, downloading an original may open a native Save dialog that is absent
-from the page DOM and download-event observations. The Skill checks Chrome's native UI
-after one click, confirms the current filename and private destination, and verifies the
-actual saved bytes. Delayed dialogs and concurrent user actions require re-observation,
-not duplicate clicks. A timeout leaves the cause unknown; explicit tool/access denial
-and `ERR_BLOCKED_BY_CLIENT` stop the affected path and are reported separately. See the
-[download and diagnosis workflow](../skills/ntulearn-browser/references/host-boundaries.md#macos--chrome-downloads).
+The in-app browser can save a file even when its download observer times out. The Skill
+records a filename baseline in the known download directory before one click, identifies
+and validates the new file, then copies it into the owner-only private capture bundle.
+It does not change everyday Chrome settings or treat old files as fresh downloads.
+The observer discrepancy remains unexplained; verified file acquisition is separate from
+library import. On Chrome, native Save may bring the browser forward, so interactive Save
+requires agreement. Timeouts do not justify duplicate clicks; explicit tool/access denial
+and `ERR_BLOCKED_BY_CLIENT` stop the affected path. See the
+[download and diagnosis workflow](../skills/ntulearn-browser/references/host-boundaries.md#in-app-browser-downloads).
 
 After collection, representative local commands are:
 
