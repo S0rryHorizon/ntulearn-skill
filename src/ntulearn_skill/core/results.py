@@ -9,13 +9,24 @@ from datetime import datetime, timedelta
 from enum import Enum, StrEnum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from ntulearn_skill.core.identifiers import CourseId
 from ntulearn_skill.core.models import Coverage
 
+if TYPE_CHECKING:
+    from ntulearn_skill.sync.freshness import FreshnessDecision
+
+
 SCHEMA_VERSION = "1.0"
 T = TypeVar("T")
+_COVERAGE_RANK = {
+    Coverage.COMPLETE: 0,
+    Coverage.STALE: 1,
+    Coverage.PARTIAL: 2,
+    Coverage.UNKNOWN: 3,
+    Coverage.FAILED: 4,
+}
 
 
 class ErrorCategory(StrEnum):
@@ -230,6 +241,41 @@ class ResultEnvelope(Generic[T]):
         return _json_value(self, include_local_paths=include_local_paths)  # type: ignore[return-value]
 
 
+def aggregate_coverage(coverage: tuple[CoverageView, ...]) -> Coverage:
+    return (
+        Coverage.UNKNOWN
+        if not coverage
+        else max((item.coverage for item in coverage), key=_COVERAGE_RANK.__getitem__)
+    )
+
+
+def worse_coverage(left: Coverage, right: Coverage) -> Coverage:
+    return max((left, right), key=_COVERAGE_RANK.__getitem__)
+
+
+def freshness_view(scope_name: str, decision: FreshnessDecision) -> FreshnessView:
+    return FreshnessView(
+        scope_name,
+        decision.status.value,
+        decision.as_of,
+        None if decision.age is None else int(decision.age.total_seconds()),
+        decision.satisfied,
+        tuple(code.value for code in decision.warning_codes),
+        decision.successful_observation_at,
+        None
+        if decision.successful_observation_age is None
+        else int(decision.successful_observation_age.total_seconds()),
+        decision.complete_snapshot_at,
+        None
+        if decision.complete_snapshot_age is None
+        else int(decision.complete_snapshot_age.total_seconds()),
+        None if decision.max_age is None else int(decision.max_age.total_seconds()),
+        decision.ttl_configured,
+        decision.latest_coverage,
+        None if decision.last_attempt_outcome is None else decision.last_attempt_outcome.value,
+    )
+
+
 __all__ = [
     "SCHEMA_VERSION",
     "ConflictView",
@@ -240,4 +286,7 @@ __all__ = [
     "ResultEnvelope",
     "SafeError",
     "SafeWarning",
+    "aggregate_coverage",
+    "freshness_view",
+    "worse_coverage",
 ]
