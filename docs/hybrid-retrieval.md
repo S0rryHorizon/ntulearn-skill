@@ -30,6 +30,12 @@ assign it to `CoreService.search_service`. Use a `SearchQuery` with
 matching mode and the model/ranking profile. Course, current-version, document-kind
 and other existing filters apply to both candidate channels before fusion. Source
 references and page/paragraph locators remain those of the underlying documents.
+If a sync replaces documents between reads, fusion excludes keys absent from the
+dense snapshot; surviving candidates retain their original rank contributions.
+
+Hybrid CLI JSON includes a `warnings` entry with code `hybrid_candidates` and the
+message `Found N hybrid candidate(s); verify relevance in the cited source.` This
+also marks empty hybrid results. Lexical output, including `all`, is unchanged.
 
 The flat local index is bounded to 50,000 documents per selected scope. It is not an
 approximate vector database. Relevance scores are ranking signals, not calibrated

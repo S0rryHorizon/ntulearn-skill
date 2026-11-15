@@ -113,6 +113,7 @@ class HybridSearchService(SearchService):
             raise ValueError("hybrid search requires a non-negative offset and no cursor")
         # Lexical search also validates the query and obtains coverage/freshness.
         lexical = super().search(replace(query, limit=100, neighbor_count=0))
+        lexical = replace(lexical, warnings=(*lexical.warnings, "hybrid_candidates"))
         with self._lock:
             with self.database.transaction() as connection:
                 self.index.ensure_current(connection)
@@ -121,7 +122,12 @@ class HybridSearchService(SearchService):
             if len(rows) > 50_000:
                 raise SearchError("hybrid scope exceeds the local embedding bound")
             if not rows:
-                return replace(lexical, items=(), truncated=False)
+                return replace(
+                    lexical,
+                    items=(),
+                    truncated=False,
+                    message="Found 0 hybrid candidate(s); verify relevance in the cited source.",
+                )
             # Stable keys tie-break both channels and preserve page ordering.
             rows = tuple(sorted(rows, key=lambda r: int(r["search_document_key"])))
             keys = [int(r["search_document_key"]) for r in rows]
@@ -148,9 +154,12 @@ class HybridSearchService(SearchService):
             for ranking in ([h.search_document_key for h in lexical.items], dense):
                 for position, key in enumerate(ranking, 1):
                     fused[key] += 1 / (60 + position)
-            ranking = sorted(fused, key=lambda key: (-fused[key], key))[:100]
-            selected = ranking[offset : offset + query.limit]
             by_key = {int(r["search_document_key"]): r for r in rows}
+            # A sync may replace lexical keys before the dense snapshot is read.
+            ranking = sorted(
+                (key for key in fused if key in by_key), key=lambda key: (-fused[key], key)
+            )[:100]
+            selected = ranking[offset : offset + query.limit]
             chunk_keys = tuple(
                 int(by_key[key]["chunk_key"])
                 for key in selected

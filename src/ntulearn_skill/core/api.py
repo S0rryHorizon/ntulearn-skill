@@ -476,7 +476,13 @@ class CoreService:
             def search_warnings() -> tuple[SafeWarning, ...]:
                 result = loaded[0]
                 warnings = tuple(
-                    SafeWarning(code, "Local search coverage is incomplete.", "search")
+                    SafeWarning(
+                        code,
+                        result.message
+                        if code == "hybrid_candidates"
+                        else "Local search coverage is incomplete.",
+                        "search",
+                    )
                     for code in result.warnings
                 )
                 if unresolved_matches and unresolved_matches[0]:
