@@ -140,7 +140,14 @@ def build_parser() -> SafeArgumentParser:
     search.add_argument("--limit", type=_result_limit, default=20)
     search.add_argument("--cursor")
     search.add_argument("--neighbors", type=_neighbor_count, default=1)
+    search.add_argument(
+        "--match",
+        choices=("all", "any"),
+        default="all",
+        help="Require all keywords (default) or retrieve any matching term",
+    )
     search.add_argument("--current-only", action="store_true", default=False)
+    search.add_argument("--embedding-model", help="Local BGE v1.5 directory for hybrid --match any")
     _freshness_options(search)
 
     announcements = commands.add_parser("announcements", help="List course announcements")

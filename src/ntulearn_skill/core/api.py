@@ -679,6 +679,8 @@ class CoreService:
                 effective_query.cursor,
                 {
                     "text": effective_query.text,
+                    "match_mode": effective_query.match_mode,
+                    "ranking_profile": self.search_service.ranking_profile,
                     "course": None
                     if search_filters.course is None
                     else [search_filters.course.provider, search_filters.course.value],

@@ -69,7 +69,7 @@ _SCOPE_ALIASES = {
 }
 
 
-def _literal_match_query(value: str) -> str:
+def _literal_match_query(value: str, match_mode: str = "all") -> str:
     # Let SQLite's unicode61 tokenizer perform the same case normalization for
     # indexed text and queries.  Python casefolding expands some characters
     # (for example, German sharp s) that unicode61 deliberately keeps intact.
@@ -78,7 +78,10 @@ def _literal_match_query(value: str) -> str:
         raise ValueError("search text must contain a Unicode word")
     if len(words) > 64:
         raise ValueError("search text contains too many terms")
-    return " AND ".join(f'"{word}"' for word in words)
+    if match_mode not in {"all", "any"}:
+        raise ValueError("search match mode must be all or any")
+    operator = " AND " if match_mode == "all" else " OR "
+    return operator.join(f'"{word}"' for word in words)
 
 
 def _classification_value_sql(value_column: str, fallback: str) -> str:
@@ -116,6 +119,8 @@ def _classification_value_sql(value_column: str, fallback: str) -> str:
 class SearchService:
     """Search only local relational text; never opens originals or uses a network."""
 
+    ranking_profile = "lexical-v1"
+
     def __init__(self, database: Database) -> None:
         self.database = database
         self.index = SearchIndex(database)
@@ -126,7 +131,7 @@ class SearchService:
             raise ValueError("search cursors are consumed by CoreService")
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise ValueError("search offset must be a non-negative integer")
-        match_query = _literal_match_query(query.text)
+        match_query = _literal_match_query(query.text, query.match_mode)
         try:
             with self.database.transaction() as connection:
                 self.index.ensure_current(connection)
@@ -494,12 +499,14 @@ class SearchService:
     def _matched_rows(
         connection: sqlite3.Connection,
         query: SearchQuery,
-        match_query: str,
+        match_query: str | None,
         course_key: int | None,
         offset: int,
+        *,
+        row_limit: int | None = None,
     ) -> tuple[sqlite3.Row, ...]:
-        clauses = ["search_document_fts MATCH ?"]
-        parameters: list[object] = [match_query]
+        clauses = ["search_document_fts MATCH ?"] if match_query is not None else ["1=1"]
+        parameters: list[object] = [match_query] if match_query is not None else []
 
         def add_values(column: str, values: tuple[str, ...]) -> None:
             if not values:
@@ -537,15 +544,23 @@ class SearchService:
                     WHERE resource_key = document.resource_key
                 ))"""
             )
-        parameters.extend((query.limit + 1, offset))
+        parameters.extend((query.limit + 1 if row_limit is None else row_limit, offset))
+        rank_sql = (
+            "bm25(search_document_fts, 12.0, 5.0, 7.0, 10.0, 9.0, 8.0, 1.0)"
+            if match_query is not None
+            else "0.0"
+        )
+        source_sql = (
+            "search_document_fts JOIN search_document document "
+            "ON document.search_document_key = search_document_fts.rowid"
+            if match_query is not None
+            else "search_document document"
+        )
         sql = f"""
             SELECT document.*, provider.name AS provider, course_object.remote_key AS course_remote,
-                   bm25(search_document_fts, 12.0, 5.0, 7.0, 10.0, 9.0, 8.0, 1.0)
-                       AS rank_value,
+                   {rank_sql} AS rank_value,
                    locator.structured_json AS locator_json
-            FROM search_document_fts
-            JOIN search_document document
-              ON document.search_document_key = search_document_fts.rowid
+            FROM {source_sql}
             JOIN course course_row ON course_row.course_key = document.course_key
             JOIN source_object course_object
               ON course_object.source_object_key = course_row.source_object_key

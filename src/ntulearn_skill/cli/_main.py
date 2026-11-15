@@ -125,6 +125,7 @@ def _search_query(args: argparse.Namespace) -> SearchQuery:
         args.limit,
         args.neighbors,
         args.cursor,
+        match_mode=args.match,
     )
 
 
@@ -173,6 +174,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         _freshness(args)
     if args.command == "search":
         _search_query(args)
+        if args.embedding_model and args.match != "any":
+            raise UsageError("hybrid retrieval requires --match any")
     elif args.command in {"events", "upcoming", "recent-materials"}:
         fixed = _absolute_window(args)
         if fixed is None and getattr(args, "cursor", None) is not None:
@@ -230,6 +233,14 @@ def _dispatch(
             cursor=args.cursor,
         )
     if command == "search":
+        if args.embedding_model:
+            from ntulearn_skill.search.hybrid import HybridSearchService, LocalBgeEncoder
+
+            service.search_service = HybridSearchService(
+                service.database,
+                LocalBgeEncoder(args.embedding_model),
+                cache_path=service.database.path.with_name("retrieval-embeddings.npz"),
+            )
         query = _search_query(args)
         if args.course_key is None:
             return service.search(query, _freshness(args))

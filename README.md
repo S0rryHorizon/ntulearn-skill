@@ -24,6 +24,8 @@ event evidence, conflicts and synchronization state under a private runtime root
 - Private SQLite metadata and FTS5 indexes plus content-addressed resource storage.
 - PDF and DOCX parsing with source locators; unsupported formats remain explicit.
 - Deterministic lexical search with bounded neighboring chunks.
+- Optional local BGE embeddings fused with BM25 through reciprocal rank fusion;
+  course/version filters and source locators are shared with lexical search.
 - Source-backed announcements, assessments and event candidates.
 - Provenance-first event reconciliation that preserves unresolved conflicts and
   manual local decisions.
@@ -55,7 +57,10 @@ for this bounded browser-host-assisted trial. The same is true of automatic SSO 
 unsupported formats. These deferred capabilities prevent broader compatibility
 claims rather than blocking evaluation of the documented local retrieval lane.
 
-Search is lexical rather than semantic. The built-in parsers cover PDF and DOCX;
+Search defaults to lexical `all`-keyword matching. `--match any` provides an OR/BM25
+mode. With the optional `retrieval` extra and an explicitly provisioned local BGE
+v1.5 model, hybrid retrieval is available; it does not generate answers or decide
+whether a source proves a claim. The built-in parsers cover PDF and DOCX;
 PPTX text extraction remains unsupported, and ordinary page bodies, embedded
 attachments, external modules, scanned-document fallback quality, complex DOCX
 tables, large-list pagination and several remote freshness mechanisms remain partial,

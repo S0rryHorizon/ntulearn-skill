@@ -62,6 +62,8 @@ dist/
 .ruff_cache/
 .coverage
 htmlcov/
+retrieval-embeddings.npz
+/.local-repository-history/
 
 # Editors and operating systems
 .DS_Store

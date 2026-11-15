@@ -308,6 +308,7 @@ class CodexToolDispatcher:
                         "freshness",
                         "cursor",
                         "current_only",
+                        "match_mode",
                     }
                 ),
                 required=frozenset({"query"}),
@@ -319,6 +320,7 @@ class CodexToolDispatcher:
                 ),
                 limit=_integer(arguments.get("limit", 20), maximum=100),
                 neighbor_count=_integer(arguments.get("neighbor_count", 1), minimum=0, maximum=5),
+                match_mode=_text(arguments.get("match_mode", "all")),
                 cursor=None
                 if arguments.get("cursor") is None
                 else _text(arguments["cursor"], maximum=2_048),

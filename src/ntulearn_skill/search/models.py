@@ -88,8 +88,11 @@ class SearchQuery:
     limit: int = 20
     neighbor_count: int = 1
     cursor: str | None = None
+    match_mode: str = "all"
 
     def __post_init__(self) -> None:
+        if self.match_mode not in {"all", "any"}:
+            raise ValueError("search match mode must be all or any")
         if not isinstance(self.filters, SearchFilters):
             raise TypeError("search filters must be typed")
         if not self.text.strip():
