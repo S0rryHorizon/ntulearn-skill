@@ -1615,10 +1615,6 @@ class CoreService:
         return f"{scope.provider}/{course}/{scope.data_kind}/{scope.window_key}"
 
     @staticmethod
-    def _temporal_bounds(value: object) -> tuple[datetime, datetime] | None:
-        return event_views.temporal_bounds(value)
-
-    @staticmethod
     def _overlaps(event: CanonicalEvent, window: TimeWindow) -> bool:
         return event_views.overlaps(event, window)
 

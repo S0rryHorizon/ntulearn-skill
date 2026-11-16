@@ -131,6 +131,9 @@ ntulearn materials 1 --freshness cache-only
 ntulearn recent-materials 1 --days 14 --freshness cache-only
 ntulearn search "synthetic interference" --course 1 --limit 20 --neighbors 1
 ntulearn search "synthetic interference" --course 1 --current-only --freshness cache-only
+ntulearn search "synthetic interference diffraction" --course 1 --match any
+ntulearn search "How does synthetic interference change?" --course 1 --match any \
+  --embedding-model /absolute/path/to/local/bge-small-en-v1.5 --current-only
 ntulearn announcements 1
 ntulearn assessments 1
 ntulearn events --course 1 --show-conflicts

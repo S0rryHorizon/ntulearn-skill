@@ -46,6 +46,12 @@ With optional hybrid retrieval, CLI JSON carries a `hybrid_candidates` warning,
 including for empty results. Its message marks candidates to verify in the cited
 source; do not present them as literal keyword hits or proof that an answer exists.
 
+```console
+ntulearn --json search "synthetic optics interference" --course COURSE_KEY --match any --freshness cache-only
+ntulearn --json search "How does synthetic interference change?" --course COURSE_KEY --match any \
+  --embedding-model /absolute/path/to/local/bge-small-en-v1.5 --freshness cache-only
+```
+
 | Intent | Primary Core/CLI reads | Bilingual lexical decomposition and fallback |
 | --- | --- | --- |
 | Future assignments, tests, exams, presentations | `upcoming --days N`, then `assessments` | Search separate variants drawn from `assignment/homework/作业`, `quiz/test/exam/测验/考试`, and `presentation/oral/slides/展示/汇报`. Include course-specific nouns from the question. |

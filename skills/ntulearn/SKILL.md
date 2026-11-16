@@ -31,6 +31,12 @@ configured local BGE model can enable optional hybrid retrieval, described in
 cache-only request. Retrieval candidates are not proof that an answer exists; verify
 their source text. English benchmark results do not establish Chinese semantic quality.
 
+```console
+ntulearn --json search "synthetic optics interference" --course COURSE_KEY --match any --freshness cache-only
+ntulearn --json search "How does synthetic interference change?" --course COURSE_KEY --match any \
+  --embedding-model /absolute/path/to/local/bge-small-en-v1.5 --freshness cache-only
+```
+
 Interpret `freshness_satisfied` only against the requested policy. In particular,
 cache-only can be satisfied while evidence is `STALE` or `UNKNOWN`, and `CURRENT` with
 `ttl_configured: false` carries no maximum-age guarantee. Treat

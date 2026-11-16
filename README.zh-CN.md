@@ -117,6 +117,9 @@ ntulearn materials 1 --freshness cache-only
 ntulearn recent-materials 1 --days 14 --freshness cache-only
 ntulearn search "synthetic optics" --course 1 --neighbors 1
 ntulearn search "synthetic optics" --course 1 --current-only --freshness cache-only
+ntulearn search "synthetic optics interference" --course 1 --match any
+ntulearn search "How does synthetic interference change?" --course 1 --match any \
+  --embedding-model /absolute/path/to/local/bge-small-en-v1.5 --current-only
 ntulearn events --course 1 --show-conflicts
 ntulearn source 7 --kind source_locator --context-window 1
 ntulearn resource 3

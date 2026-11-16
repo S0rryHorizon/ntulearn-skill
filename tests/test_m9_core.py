@@ -36,6 +36,7 @@ from ntulearn_skill.core.api import (
     SyncPolicy,
     TimeWindow,
 )
+from ntulearn_skill.core.event_views import temporal_bounds
 from ntulearn_skill.core.results import ErrorCategory, ResultEnvelope
 from ntulearn_skill.events import (
     CandidateFieldName,
@@ -440,7 +441,7 @@ def test_upcoming_bounds_keep_normalized_date_and_conflicting_alternative() -> N
         "source_text": "10 January 2031",
         "source_timezone": None,
     }
-    assert CoreService._temporal_bounds(date_only) is not None
+    assert temporal_bounds(date_only) is not None
 
     alternative = Claim(
         7,
